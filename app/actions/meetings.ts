@@ -7,7 +7,6 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { getAuthContext } from '@/lib/auth';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-import type { Leg } from '@/lib/types';
 
 export interface CreateMeetingState {
   error?: string;
@@ -154,8 +153,3 @@ export async function settleMeeting(_prev: SettleState, formData: FormData): Pro
   redirect(`/meetings/${meetingId}`);
 }
 
-/** Read-only helper used by the meeting screen header (kept here for cohesion). */
-export function legLabel(leg: Leg): string {
-  const race = leg.race_number !== null ? ` · R${leg.race_number}` : '';
-  return `Leg ${leg.leg_number}${race}`;
-}

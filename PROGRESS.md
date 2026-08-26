@@ -24,6 +24,11 @@ Scoring legend per item: ✅ PASS (executed & verified) · ❌ FAIL · ⏸ DEFER
 | M1 | R2 | Test: anon key **without a session** cannot read `picks` or `meetings` | ✅ PASS | `npm run test:security` → "anon (no session) reads zero meetings" ✅ · "anon (no session) reads zero picks" ✅ · "anon (no session) cannot insert a meeting" ✅ |
 | M1 | R2 | Test: user A cannot be forged by B (`user_id` = A on B's insert) | ✅ PASS | "cross-user pick insert rejected (B forging A's user_id)" ✅ — plus "cross-user pick delete rejected (A's pick survives)" ✅ (RLS DELETE affects zero rows silently, so survival is asserted via service-role count) |
 | M1 | R2 | Test: inserting a pick into a `locked` meeting rejected by the DATABASE | ✅ PASS | "insert into LOCKED meeting rejected by database" ✅ · "delete from LOCKED meeting also rejected (pick survives)" ✅ — policy subquery checks parent status, not UI state |
+| M2 | R3 | Wrong passcode does not create a session or a profile row | ✅ PASS | `npm run test:auth` (Puppeteer vs live server + service-role inspection): stays on /login with visible error · profile rows for that name = 0 · auth-user count unchanged |
+| M2 | R3 | Correct passcode creates exactly one profile row per user and persists across a reload | ✅ PASS | lands on / · exactly 1 profile row created · reload keeps session at / (no bounce to /login) · header shows display name · sign-out returns to /login |
+| M2 | R3 | Unauthenticated request to `/meetings/[id]` redirects to `/login` | ✅ PASS | fresh browser context GET /meetings/<uuid> → final URL /login; also verified via curl |
+
+**M2 summary:** 9/9 auth checks green (`npm run test:auth`, new script added). Found & fixed a real compile-breaking bug through this milestone's execution: `app/actions/meetings.ts` exported a sync helper from a `'use server'` file ("Server Actions must be async functions") which 500'd every /meetings/* route — dead code removed.
 
 **M1 summary:** hosted project linked (`cznuxzrbvmybsrjtmsvq`, Sydney); migration pushed; Anonymous sign-ins enabled (`enable_anonymous_sign_ins = true` via config.toml → `config push`); `.env.local` written (gitignored — verified with `git check-ignore`); **15/15 security integration tests green over the wire**, including positive controls.
 
