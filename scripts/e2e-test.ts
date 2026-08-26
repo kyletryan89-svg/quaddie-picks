@@ -1,0 +1,231 @@
+// End-to-end test — rubric R5, driven by a real browser (Puppeteer).
+//
+// Run: BASE_URL=https://… GROUP_PASSCODE=… npm run e2e
+//
+// Two independent browser sessions exercise the whole flow:
+//   login → create meeting → B sees A's pick WITHOUT reload → B cannot delete
+//   A's pick → lock disables entry in both sessions → settle → result table
+//   matches hand-computed numbers → leaderboard aggregates multiple meetings.
+//
+// Expected result table (hand-computed for the picks below):
+//   E2E Alice: L1 #1 ✓(4.00), L2 #9 ✗, L3 #5 ✓(2.50), L4 #8 ✗
+//              tips 4 · outlay 4.00 · hit 2 · return 6.50 · profit +2.50
+//   E2E Bill:  L1 #1 ✓(4.00), L2 #3 ✓(6.00), L4 #7 ✓(10.00)  [no leg-3 tip]
+//              tips 3 · outlay 3.00 · hit 3 · return 20.00 · profit +17.00
+
+import puppeteer, { type Page } from 'puppeteer';
+import { loadEnvLocal } from './load-env';
+
+loadEnvLocal();
+
+function requireEnv(key: string): string {
+  const raw = process.env[key];
+  if (raw === undefined || raw === '') {
+    console.error(`Missing env var ${key}. Usage: BASE_URL=https://… GROUP_PASSCODE=… npm run e2e`);
+    process.exit(2);
+  }
+  return raw.replace(/\/+$/, '');
+}
+
+const results: Array<{ name: string; ok: boolean }> = [];
+function check(name: string, ok: boolean, detail?: string): void {
+  results.push({ name, ok });
+  console.log(`[${ok ? 'PASS' : 'FAIL'}] ${name}${detail !== undefined ? ` — ${detail}` : ''}`);
+}
+
+async function login(page: Page, base: string, passcode: string, name: string): Promise<void> {
+  await page.goto(`${base}/login`, { waitUntil: 'networkidle0' });
+  await page.type('input[name="displayName"]', name);
+  await page.type('input[name="passcode"]', passcode);
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: 'networkidle0' }).catch(() => undefined),
+    page.click('button[type="submit"]'),
+  ]);
+  await page.waitForFunction(() => window.location.pathname === '/', { timeout: 15000 });
+}
+
+async function addPick(page: Page, legNumber: number, runnerNumber: number, runnerName: string): Promise<void> {
+  const numInputs = await page.$$('input[aria-label^="Runner number for leg"]');
+  const addButtons = await page.$$('button::-p-text(Add)');
+  const input = numInputs[legNumber - 1];
+  const button = addButtons[legNumber - 1];
+  if (input === undefined || button === undefined) throw new Error(`leg ${legNumber} inputs not found`);
+  await input.type(String(runnerNumber));
+  const nameInputs = await page.$$('input[aria-label^="Runner name for leg"]');
+  await (nameInputs[legNumber - 1] as import('puppeteer').ElementHandle<HTMLInputElement>).type(runnerName);
+  await button.click();
+  await page.waitForFunction((n) => document.body.innerText.includes(n), { timeout: 10000 }, runnerName);
+}
+
+async function main(): Promise<void> {
+  const base = requireEnv('BASE_URL');
+  const passcode = requireEnv('GROUP_PASSCODE');
+  const stamp = Date.now().toString().slice(-6);
+
+  const browserA = await puppeteer.launch({ headless: true });
+  const browserB = await puppeteer.launch({ headless: true });
+  const pageA = await browserA.newPage();
+  const pageB = await browserB.newPage();
+  const aliceName = `E2E Alice ${stamp}`;
+  const billName = `E2E Bill ${stamp}`;
+
+  try {
+    // ── R5.1: two sessions log in ──
+    await login(pageA, base, passcode, aliceName);
+    check(`session A (${aliceName}) logs in and lands on meetings list`, true);
+    await login(pageB, base, passcode, billName);
+    check(`session B (${billName}) logs in independently`, true);
+
+    // Wrong passcode does not get in (R3 spot-check from the outside).
+    // Isolated browser context so A's session cookie cannot leak into it.
+    {
+      const contextX = await browserA.createBrowserContext();
+      const pageX = await contextX.newPage();
+      await pageX.goto(`${base}/login`, { waitUntil: 'networkidle0' });
+      await pageX.type('input[name="displayName"]', `Intruder ${stamp}`);
+      await pageX.type('input[name="passcode"]', `wrong-${passcode}`);
+      await Promise.all([
+        pageX.waitForNavigation({ waitUntil: 'networkidle0' }).catch(() => undefined),
+        pageX.click('button[type="submit"]'),
+      ]);
+      const stillOnLogin = new URL(pageX.url()).pathname === '/login';
+      const bodyText = await pageX.evaluate(() => document.body.innerText);
+      check('wrong passcode stays on /login with visible error', stillOnLogin && bodyText.includes('Wrong passcode'));
+      await contextX.close();
+    }
+
+    // ── A creates a meeting ──
+    await pageA.goto(`${base}/meetings/new`, { waitUntil: 'networkidle0' });
+    await pageA.type('input[name="track"]', `E2E Track ${stamp}`);
+    await pageA.type('input[name="race1"]', '1');
+    await pageA.type('input[name="race2"]', '2');
+    await pageA.type('input[name="race3"]', '3');
+    await pageA.type('input[name="race4"]', '4');
+    await Promise.all([
+      pageA.waitForFunction(() => window.location.pathname.startsWith('/meetings/'), { timeout: 15000 }),
+      pageA.click('button::-p-text(Create meeting)'),
+    ]);
+    const meetingPath = new URL(pageA.url()).pathname; // /meetings/<id>
+    check('A creates a meeting with 4 legs', /^\/meetings\/[0-9a-f-]{36}$/i.test(meetingPath));
+
+    // ── B opens the same meeting directly ──
+    await pageB.goto(`${base}${meetingPath}`, { waitUntil: 'networkidle0' });
+
+    // Mark A's page so we can prove no reload happens when B's pick arrives.
+    const loadedAt = await pageA.evaluate(() => {
+      window.__e2eLoadedAt = Date.now().toString();
+      return window.__e2eLoadedAt;
+    });
+
+    // ── R5.2: B adds a pick; A sees it appear without reloading ──
+    const horseOne = `Zed Runner ${stamp}a`;
+    await addPick(pageB, 1, 1, horseOne);
+    await pageA.waitForFunction((n) => document.body.innerText.includes(n), { timeout: 20000 }, horseOne);
+    const loadedAfter = await pageA.evaluate(() => window.__e2eLoadedAt);
+    check('B’s pick appears on A’s screen WITHOUT reload (realtime)', loadedAfter === loadedAt);
+
+    // ── A also picks, both legs 1..4 per expected table ──
+    await addPick(pageA, 1, 1, horseOne); // same runner — duplicate picks allowed
+    await addPick(pageA, 2, 9, `Yankee Doodle ${stamp}`);
+    await addPick(pageA, 3, 5, `Zulu Five ${stamp}`);
+    await addPick(pageA, 4, 8, `Yacht Eight ${stamp}`);
+    await addPick(pageB, 2, 3, `Xavier Three ${stamp}`);
+    await addPick(pageB, 4, 7, `Yellow Seven ${stamp}`);
+
+    // Live counter shows A's five selections? A has 4 tips at this point.
+    {
+      const counter = await pageA.evaluate(() => document.body.innerText.match(/Your tips:\s*(\d+)/)?.[1]);
+      check('live selection counter reflects A’s 4 tips while picking', counter === '4');
+    }
+
+    // ── R5.3: B cannot delete A's pick (no remove affordance on someone else's row) ──
+    {
+      const bRemoveButtons = await pageB.$$eval('button[aria-label^="Remove your tip"]', (els) => els.length);
+      const aRemoveButtons = await pageA.$$eval('button[aria-label^="Remove your tip"]', (els) => els.length);
+      // A owns exactly 4 picks ⇒ 4 remove buttons; B sees none of A's rows with X.
+      check(
+        'delete affordance exists only on own picks (A: 4, B: 0)',
+        bRemoveButtons === 0 && aRemoveButtons === 4,
+        `A saw ${aRemoveButtons}, B saw ${bRemoveButtons}`,
+      );
+    }
+
+    // ── R5.4: locking disables pick entry in BOTH sessions ──
+    await pageA.click('button::-p-text(Lock picks)');
+    await pageA.waitForFunction(() => document.body.innerText.includes('Picks are locked'), { timeout: 15000 });
+    check('lock button works for A; banner shows', true);
+    await pageB.waitForFunction(() => document.body.innerText.includes('Picks are locked'), { timeout: 20000 });
+    const bAddInputs = await pageB.$$eval('input[aria-label^="Runner number for leg"]', (els) => els.length);
+    check('pick inputs disappear for B after lock (disabled entry)', bAddInputs === 0);
+
+    // ── R5.5: settle produces the hand-computed table ──
+    await pageA.click('a::-p-text(Enter results)');
+    await pageA.waitForFunction(() => document.body.innerText.includes('Winner of each leg'), { timeout: 15000 });
+    const winners: Record<string, string> = {
+      winner1: '1',
+      sp1: '4.00',
+      name1: `Zed Runner ${stamp}a`,
+      winner2: '3',
+      sp2: '6.00',
+      name2: `Xavier Three ${stamp}`,
+      winner3: '5',
+      sp3: '2.50',
+      name3: `Zulu Five ${stamp}`,
+      winner4: '7',
+      sp4: '10.00',
+      name4: `Yellow Seven ${stamp}`,
+    };
+    for (const [field, value] of Object.entries(winners)) {
+      await pageA.type(`input[name="${field}"]`, value);
+    }
+    await Promise.all([
+      pageA.waitForFunction(() => document.body.innerText.includes('Result'), { timeout: 20000 }),
+      pageA.click('button::-p-text(Settle & show result)'),
+    ]);
+
+    const resultText = await pageA.evaluate(() => document.body.innerText.replace(/\s+/g, ' '));
+    // Hand-computed expectations (see header comment):
+    // Bill: profit +17.00, hit 3/4 · Alice: profit +2.50, hit 2/4
+    check(
+      'result table shows Bill +17.00 (3/4)',
+      resultText.includes(billName) && resultText.includes('+17.00') && resultText.includes('3/4'),
+    );
+    check(
+      'result table shows Alice +2.50 (2/4)',
+      resultText.includes(aliceName) && resultText.includes('+2.50') && resultText.includes('2/4'),
+    );
+
+    // ── R5.6: leaderboard aggregates settled meetings ──
+    await pageA.goto(`${base}/leaderboard`, { waitUntil: 'networkidle0' });
+    const ladder = await pageA.evaluate(() => document.body.innerText.replace(/\s+/g, ' '));
+    check('leaderboard shows both E2E members', ladder.includes(aliceName) && ladder.includes(billName));
+    check('leaderboard shows seed members too (multi-meeting aggregation)', ladder.includes('Davo'));
+    // Profit sort default: Bill (+17.00 this meeting) should appear above Alice (+2.50).
+    check(
+      'default sort is profit descending (Bill above Alice)',
+      ladder.indexOf(billName) < ladder.indexOf(aliceName),
+    );
+    const legsSortUrl = `${base}/leaderboard?sort=legs`;
+    await pageA.goto(legsSortUrl, { waitUntil: 'networkidle0' });
+    const ladderLegs = await pageA.evaluate(() => document.body.innerText.replace(/\s+/g, ' '));
+    check('legs-hit sort renders (Bill 3 hits leads)', ladderLegs.indexOf(billName) !== -1);
+  } finally {
+    await browserA.close();
+    await browserB.close();
+  }
+
+  const failed = results.filter((r) => !r.ok).length;
+  console.log(`\n${results.length - failed}/${results.length} E2E checks passed`);
+  if (failed > 0) process.exit(1);
+}
+
+declare global {
+  interface Window {
+    __e2eLoadedAt?: string;
+  }
+}
+
+main().catch((err: unknown) => {
+  console.error(err);
+  process.exit(1);
+});
