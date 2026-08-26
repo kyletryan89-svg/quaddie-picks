@@ -1,110 +1,112 @@
-# Scoring examples — hand-worked
+# Scoring worked examples
 
-These tables are computed **by hand** from SPEC §2 and match the automated fixtures in
-`tests/scoring.test.ts` (case numbers referenced inline). If code and this document ever
-disagree, one of them is wrong — find out which before shipping.
+These tables are hand-computed and mirror the automated fixtures in
+`tests/scoring.test.ts` (rubric R4). If a number here ever disagrees with the
+tests, the tests win — but they shouldn't.
 
-Reminder of the two conventions everything here hangs off:
+## The model (SPEC §3)
 
-- `winner_sp` is **total return per $1 staked** (stake included). SP 15.00 ⇒ a $1 winner
-  selection returns $15.00 ($14.00 profit). Never subtract 1 except implicitly inside
-  `profit = return − outlay`.
-- Every selection costs exactly **$1 notional outlay**, win or lose, hit or miss. That is
-  the *only* brake on shotgunning. Credit is never split, shared, or diluted — if you and
-  three mates all found the winner, each of you banks the full point and the full SP.
+- Every selection is a **$1 notional outlay**. Pick 6 runners in a leg, you've
+  spent $6 on that leg.
+- A leg hit pays **1 point** plus the winner's **starting price (SP)** added
+  **once** — no matter how many runners of yours won it, and no matter how many
+  other members also picked it.
+- **SP convention:** `winner_sp` is the *total return per $1 staked*, stake
+  included. An SP of 4.50 returns $4.50 on $1. It is never odds-to-one.
+- `profit = return − outlay`, `POT % = profit ÷ outlay × 100`
+  (`—` when outlay is 0).
+- Flags are display-only: **solo** = you were the only member on that leg's
+  winner; **full cover** = all four legs hit.
+- Nothing splits, nothing doubles. Credit is never divided between pickers.
 
 ---
 
-## Example 1 — No splitting (test case 1)
+## Example 1 — three mates, same winner (test case 1)
 
-Leg 1 winner: **#5 at SP 8.00**. Three members all picked #5. Nobody else picked anything
-that won.
+Leg 1 winner: #5 at SP **8.00**. Davo, Kylie and Tommo all picked #5. Nobody
+tipped anything else this meeting.
 
-| member | selections | outlay | legs hit | return | profit |
-|--------|-----------:|-------:|---------:|-------:|-------:|
-| u1     |          1 |   1.00 |        1 |   8.00 |  +7.00 |
-| u2     |          1 |   1.00 |        1 |   8.00 |  +7.00 |
-| u3     |          1 |   1.00 |        1 |   8.00 |  +7.00 |
+| Punter | Tips | Outlay | Legs hit | Return | Profit | POT % |
+|--------|------|--------|----------|--------|--------|-------|
+| Davo   | 1    | $1.00  | 1        | $8.00  | +$7.00 | 700%  |
+| Kylie  | 1    | $1.00  | 1        | $8.00  | +$7.00 | 700%  |
+| Tommo  | 1    | $1.00  | 1        | $8.00  | +$7.00 | 700%  |
 
-All three returns are identical and equal `winner_sp` exactly. Three people being right
-does not shrink anyone's payout — there is no pool, no split, no sharing. Each also gets
-their 1 leg-hit point.
+The point and the full $8.00 go to **each** of them intact. Three people being
+right together does not dilute anybody.
 
-## Example 2 — No double-paying (test case 2)
+## Example 2 — boxing five wide (test cases 2 & 3)
 
-Leg 1 winner: **#7 at SP 4.50**. u1 boxed five runners: #1, #2, #3, #4, #7.
+Leg 1 winner: #7 at SP **4.50**. Kylie tipped #1, #2, #3, #4 **and** #7.
 
-| member | selections | outlay | legs hit | return | profit |
-|--------|-----------:|-------:|---------:|-------:|-------:|
-| u1     |          5 |   5.00 |        1 |   4.50 |  −0.50 |
+| Punter | Tips | Outlay | Legs hit | Return | Profit | POT % |
+|--------|------|--------|----------|--------|--------|-------|
+| Kylie  | 5    | $5.00  | 1        | $4.50  | −$0.50 | −10%  |
 
-Hitting the winner with one of five picks still pays the winner's SP **once**. The extra
-four runners bought nothing except $4 of extra outlay — which is precisely how the app
-punishes spraying without ever diluting credit.
+The winner pays **once**: return is $4.50, not 5 × $4.50. Five $1 tickets, one
+of them winning, nets a 50-cent loss. That is the whole cost-of-clutter story
+the counter on the meeting screen exists to show.
 
-## Example 3 — The SP convention itself (test case 3)
+## Example 3 — shotgun vs sharpshooter (test case 4)
 
-One leg, winner **#3 at SP 4.50**, one member picked it and nothing else:
+Same meeting, two styles. Winners: L1 #77 @ 15.00 · L2 #2 @ 1.90 · L3 #33 @
+21.00 · L4 #4 @ 2.40.
 
-return = 4.50, outlay = 1.00, profit = 4.50 − 1.00 = **+3.50**. ✔
+- **Tommo boxes six wide every leg** (24 selections, $24 outlay) and lands all
+  four winners at those short-ish prices: return = 15.00 + 1.90 + 21.00 + 2.40
+  = **$40.30**, profit **+$16.30**, POT 67.9%.
+- **Davo has one dart per leg** (4 selections, $4 outlay), hits #77 and #33,
+  misses legs 2 and 4: return = 15.00 + 21.00 = **$36.00**, profit **+$32.00**,
+  POT 800%.
 
-If you catch yourself computing 4.50 − 1 = 3.50 as "odds", stop: the subtraction above is
-`profit = return − outlay`, not odds conversion. SP is already total return.
+| Punter | Tips | Outlay | Legs hit | Return  | Profit  | POT %  |
+|--------|------|--------|----------|---------|---------|--------|
+| Tommo  | 24   | $24.00 | **4**    | $40.30  | +$16.30 | 67.9%  |
+| Davo   | 4    | $4.00  | 2        | $36.00  | **+$32.00** | 800% |
 
-## Example 4 — Shotgun vs sniper (test case 4, the argument-settler)
+Both numbers are reportable side by side — Tommo tops the legs-hit sort, Davo
+tops the profit sort. Neither view is hidden from the group (SPEC §2).
 
-Four settled legs:
+## Example 4 — the empty leg (test case 5)
 
-| leg | winner | SP |
-|-----|--------|------:|
-| 1   | #77    | 15.00 |
-| 2   | #2     |  1.90 |
-| 3   | #33    | 21.00 |
-| 4   | #4     |  2.40 |
+Winners: L1 #1 @ 2.00 · L2 #2 @ 3.00 · L3 #9 @ 5.00 · L4 #4 @ 4.00.
+Sarah tips L1 #1 ✓, L2 #2 ✓, **nothing at all in leg 3**, L4 #4 ✓.
 
-- **userA** boxes six wide in every leg (all four winners included among their sixes):
-  24 selections, outlay 24.00. Hit every leg ⇒ return = 15.00 + 1.90 + 21.00 + 2.40 = 40.30.
-- **userB** fires one bullet per leg (4 selections, outlay 4.00), nails #77 and #33,
-  misses legs 2 and 4 ⇒ return = 15.00 + 21.00 = 36.00.
+| Punter | Tips | Outlay | Legs hit | Return | Profit | POT % | Full cover |
+|--------|------|--------|----------|--------|--------|-------|------------|
+| Sarah  | 3    | $3.00  | 3        | $9.00  | +$6.00 | 200%  | no         |
 
-| member | selections | outlay | legs hit | return | profit |
-|--------|-----------:|-------:|---------:|-------:|-------:|
-| userA  |         24 |  24.00 |    **4** |  40.30 | +16.30 |
-| userB  |          4 |   4.00 |    **2** |  36.00 | **+32.00** |
+You cannot hit a leg you never entered — her ceiling is 3/4 and full cover stays
+out of reach no matter what happens in leg 3. Outlay only counts legs entered.
 
-Both facts reportable and both true at once: **userA wins the legs-hit column (4 > 2);
-userB wins the money (+32.00 > +16.30)**. Wide netted more winners but each of userA's
-six-pick legs cost $6 of outlay to find what userB found for $1. Neither number is "the"
-number — which is exactly why the leaderboard carries both sorts.
+## Example 5 — the solo flag (test case 7)
 
-Solo flags here: none — userB also had #77 and #33, so userA was never the sole picker of
-a winning runner.
+Winners: L1 #5 @ 4.00 · L2 #6 @ 6.00. The loner is the only member on #5; two
+members (a duo) both had #6.
 
-## Example 5 — Empty leg (test case 5)
+| Punter | Tips | Outlay | Legs hit | Return | Profit | Solo legs |
+|--------|------|--------|----------|--------|--------|-----------|
+| Loner  | 1    | $1.00  | 1        | $4.00  | +$3.00 | **1**     |
+| Duo-a  | 1    | $1.00  | 1        | $6.00  | +$5.00 | 0         |
+| Duo-b  | 1    | $1.00  | 1        | $6.00  | +$5.00 | 0         |
 
-u1 skips leg 3 entirely but finds winners in legs 1, 2 and 4:
+Solo means *exactly one member* picked that winner — being one of two or more
+is not solo, even though everyone still gets the full SP. The flag is
+display-only bragging rights; it never changes money.
 
-- selections 3 ⇒ outlay 3.00 (only legs actually entered cost anything),
-- legs hit 3 ⇒ can never be full cover,
-- leg 3's winner scores them nothing, because they were not in the race.
+## Example 6 — full cover (test case 8)
 
-## Example 6 — All losses (test case 6)
+All four winners land at 2.00. A perfect card (#1/#2/#3/#4) sets the flag;
+three-of-four with a miss in leg 4 does not, whatever the prices:
 
-Nobody finds a winner across the meeting: every member's return is 0.00 and every
-member's profit equals minus their outlay. Spray wide, lose wide; tip tight, lose cheap.
+| Punter | Legs hit | Full cover |
+|--------|----------|------------|
+| Perfect | 4       | 🧹 yes      |
+| Almost  | 3        | no          |
 
-## Flags — solo & full cover (test cases 7–8)
+## Edge rules (test cases 9 & 10)
 
-- **solo**: true for a leg only when exactly one member picked that leg's winner. Display
-  only — no bonus points, ever. Two members on the same winner ⇒ neither is solo.
-- **full cover**: true only when a member hit all four legs. Display only.
-
-## POT guard (test case 9)
-
-`POT % = profit / outlay × 100`, shown as `—` whenever outlay is 0. A member with zero
-selections divides nothing, renders `—`, and breaks nothing.
-
-## Unsettled legs (test case 10)
-
-A leg with no entered winner scores as **no hit for everyone** and throws nothing: the
-meeting simply shows fewer hit-able legs until someone settles it.
+- A member with zero selections has outlay 0 → their POT renders as **—**
+  (never NaN, never ∞).
+- An unsettled leg (`winner_number` still null) simply can't be hit by anyone;
+  scoring runs without throwing, so open meetings always render safely.
