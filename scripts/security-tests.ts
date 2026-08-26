@@ -20,9 +20,9 @@ interface TestResult {
 
 const results: TestResult[] = [];
 
-function check(name: string, ok: boolean): void {
+function check(name: string, ok: boolean, detail?: string): void {
   results.push({ name, ok });
-  console.log(`[${ok ? 'PASS' : 'FAIL'}] ${name}`);
+  console.log(`[${ok ? 'PASS' : 'FAIL'}] ${name}${detail !== undefined ? ` — ${detail}` : ''}`);
 }
 
 function requireEnv(key: string): string {
@@ -83,13 +83,21 @@ async function main(): Promise<void> {
       check('anon (no session) cannot insert a meeting', sneakyInsert.error !== null);
     }
 
-    // ── setup through the real policies: A creates meeting + legs; both upsert profiles ──
+    // ── setup through the real policies: both upsert profiles, then A creates meeting + legs ──
+    // (profiles first — meetings.created_by has a FK into profiles)
+    check('member A can upsert own profile', (await clientA.from('profiles').upsert({ id: userA, display_name: `${tag}-Alice` })).error === null);
+    check('member B can upsert own profile', (await clientB.from('profiles').upsert({ id: userB, display_name: `${tag}-Bill` })).error === null);
+
     const meeting = await clientA
       .from('meetings')
       .insert({ track: `${tag}-Randwick`, meeting_date: '2026-08-29', created_by: userA })
       .select('id')
       .single();
-    check('authenticated member can create a meeting (positive control)', meeting.error === null);
+    check(
+      'authenticated member can create a meeting (positive control)',
+      meeting.error === null,
+      meeting.error !== null ? `db said: ${meeting.error.message}` : undefined,
+    );
     if (meeting.data === null) throw new Error('cannot proceed without meeting');
 
     const legs = await clientA
@@ -100,9 +108,6 @@ async function main(): Promise<void> {
     const legRows = legs.data ?? [];
     if (legRows.length !== 4) throw new Error('cannot proceed without legs');
     const leg1 = legRows.find((l) => l.leg_number === 1)!;
-
-    check('member A can upsert own profile', (await clientA.from('profiles').upsert({ id: userA, display_name: `${tag}-Alice` })).error === null);
-    check('member B can upsert own profile', (await clientB.from('profiles').upsert({ id: userB, display_name: `${tag}-Bill` })).error === null);
 
     // ── positive controls while open ──
     const ownPick = await clientA

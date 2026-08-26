@@ -26,3 +26,7 @@ next-env.d.ts
 
 # vercel
 .vercel
+
+# supabase cli local state
+supabase/.temp/
+supabase/migrations/_remote_schema.json
