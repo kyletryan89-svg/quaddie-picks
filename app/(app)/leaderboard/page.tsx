@@ -79,7 +79,7 @@ async function LeaderboardLoader({ searchParams }: PageProps) {
         ))}
       </div>
 
-      {table.rows.length === 0 ? (
+      {table.settledMeetings === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-slate-500">
           No settled meetings in {season.label} yet — nothing to argue about.
         </div>
@@ -175,5 +175,8 @@ async function loadTable(season: ReturnType<typeof seasonFor>, current: ReturnTy
     seasons.unshift(current);
   }
 
-  return { rows: buildLeaderboard(scored, roster), seasons };
+  // `rows` always has one entry per roster profile, so it is never empty and
+  // cannot signal "nothing has been settled yet" — the count of settled
+  // meetings is what the empty state actually means.
+  return { rows: buildLeaderboard(scored, roster), seasons, settledMeetings: bundles.length };
 }

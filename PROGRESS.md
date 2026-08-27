@@ -203,3 +203,49 @@ So "the field" is implemented as the runner-number range a runner number can leg
 ### Regression before commit
 
 `npm run verify` ✓ · `npm run build` ✓ · R2 security **15/15** · R3 auth **9/9** · M4 **25/25** · M5 **29/29** · delete-guard **8/8**.
+
+---
+
+## M7 — Season leaderboard, both sort modes (R5)
+
+Verified 2026-08-28 via `npm run test:m7` (`scripts/m7-check.ts`). **15/15 green.**
+
+Two meetings were built, locked and settled through the real UI in the current season, both drawn from `docs/scoring-examples.md` so the per-meeting numbers are already hand-computed there. The season totals asserted below were **added by hand from those documented rows**, then required to match both `buildLeaderboard()` and the rendered ladder.
+
+| Source | Punter | Tips | Outlay | Hits | Return | Profit |
+|--------|--------|------|--------|------|--------|--------|
+| Meeting 1 = Example 3 | Tommo | 24 | $24.00 | 4 | $40.30 | +$16.30 |
+| Meeting 1 = Example 3 | Davo | 4 | $4.00 | 2 | $36.00 | +$32.00 |
+| Meeting 2 = Example 4 (Davo plays Sarah's slip exactly) | Davo | 3 | $3.00 | 3 | $9.00 | +$6.00 |
+| Meeting 2 | Tommo | 4 | $4.00 | 3 | $10.00 | +$6.00 |
+| **Season total, hand-added** | **Tommo** | **28** | **$28.00** | **7** | **$50.30** | **+$22.30** |
+| **Season total, hand-added** | **Davo** | **7** | **$7.00** | **5** | **$45.00** | **+$38.00** |
+
+The fixtures are deliberately built so **Tommo hits more legs while Davo makes more money** — the only way to prove the two sort modes order differently rather than coincidentally agreeing.
+
+| Ms | Rubric | Item | Result | Evidence |
+|----|--------|------|--------|----------|
+| M7 | R5 | **Leaderboard aggregates two settled meetings correctly** | ✅ PASS | Rendered rows, verbatim: Tommo `["2","28","7","87.5%","0.25","3","1","$28.00","$50.30","+22.30","79.6%"]` · Davo `["2","7","5","62.5%","0.71","1","0","$7.00","$45.00","+38.00","542.9%"]` — cell for cell identical to the hand-added totals |
+| M7 | R5 | `buildLeaderboard()` agrees with the hand-added totals | ✅ PASS | Tommo `{meetings:2, selections:28, legsHit:7, returnTotal:50.3, profit:22.2999…, soloLegs:3, fullCovers:1, legsHitPct:87.5, pot:79.642…}`; Davo `{meetings:2, selections:7, legsHit:5, returnTotal:45, profit:38, soloLegs:1, fullCovers:0, legsHitPct:62.5, pot:542.857…}` |
+| M7 | SPEC §2 | Default sort is profit descending | ✅ PASS | Davo #1 (+$38.00), Tommo #2 (+$22.30) |
+| M7 | SPEC §2 | Secondary sort on legs hit | ✅ PASS | Toggle → `?sort=legs` → Tommo #1 (7 legs), Davo #2 (5 legs) |
+| M7 | — | The two sorts genuinely differ | ✅ PASS | profit: Davo→Tommo · legs: Tommo→Davo — a real reversal, not the same order twice |
+| M7 | — | Sorting re-orders without re-aggregating | ✅ PASS | Every cell in both rows byte-identical before and after the toggle |
+| M7 | — | Rendered order agrees with `sortLeaderboard()` | ✅ PASS | Pure sorter returns Tommo → Davo for `legs`, matching the DOM |
+| M7 | SPEC §6 | Season selector defaults to current | ✅ PASS | Active chip = `2026–27` = `seasonFor().label`; selector lists the seasons present in the data |
+| M7 | R6 | Ladder usable at 390px | ✅ PASS | `scrollWidth=390` (wide table scrolls inside its own container, page does not) |
+| M7 | R6 | Empty state for the season | ✅ PASS | See bug 1 below — executed, not assumed |
+
+### Bug found by executing M7 (fixed)
+
+1. **The ladder's empty state was dead code.** It keyed off `table.rows.length === 0`, but `buildLeaderboard` emits one row per roster profile, so the array is never empty while any member exists. A season with nothing settled therefore rendered a full table of all-zero rows instead of the message written for exactly that case. Now keyed off the count of settled meetings, which is what the message ("No settled meetings in {season} yet") actually means. Verified by execution: both settled meetings were parked out of season, the page was loaded for real → *"No settled meetings in 2026–27 yet — nothing to argue about."* with **0 table rows**; dates restored in a `finally` (`[restore] 2`).
+
+### Regression before commit
+
+`npm run verify` ✓ · `npm run build` ✓ (0 errors) · R2 security **15/15** · R3 auth **9/9** · M4 **25/25** · M5 **29/29** · M6 **32/32** · delete-guard **8/8**.
+
+### Rubric status entering M8
+
+R1 ✅ · R2 ✅ · R3 ✅ · R4 ✅ · **R5 ✅ complete — all six items now executed** · R6 partial (M8) · R7 not started (M9).
+
+Carried into **M8**: tap targets ≥44px (header brand link measures 24px), plus the full R6 sweep across every screen.
