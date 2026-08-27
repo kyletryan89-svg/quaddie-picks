@@ -13,6 +13,7 @@ Append-only log of decisions made during the build, per SPEC §8 rules.
 | D7 | 2026-08-26 | `GROUP_PASSCODE` generated locally; stored in `.env.local`, `.env.example`, Vercel env; referenced only in server action module | Spec §4 + R1 |
 | D8 | 2026-08-26 | `vercel.json` pins functions region `syd1` | Spec §3 |
 | D9 | 2026-08-26 | Errors render inline in UI; every list has loading/empty states | Spec R6 |
+| D10 | 2026-08-28 | `picks` set to `REPLICA IDENTITY FULL` (migration `20260828000000`) | The meeting screen subscribes with `filter: leg_id=in.(…)`. Under the default replica identity a DELETE's WAL record carries only `id`, so Realtime cannot evaluate that filter and drops the event — removing a tip never reached other members. FULL puts the whole old row in the WAL so the filter matches. Verified by probe: filtered channel went from 0 to 1 DELETE received. No new dependency; WAL cost is negligible for 5 users |
 
 **Answered questions**
 

@@ -57,6 +57,16 @@ export function MeetingScreen({ meeting, legs, initialPicks, initialNames, curre
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+  // Adopt a status the SERVER reports (after router.refresh() following a lock
+  // or settle). Without this the acting member's own screen would depend on the
+  // realtime round-trip to notice a change they made themselves. This is React's
+  // adjust-state-during-render pattern, not an effect — the effect form trips
+  // react-hooks/set-state-in-effect and re-renders twice.
+  const [lastServerStatus, setLastServerStatus] = useState(meeting.status);
+  if (meeting.status !== lastServerStatus) {
+    setLastServerStatus(meeting.status);
+    setStatus(meeting.status);
+  }
   const router = useRouter();
 
   const isOpen = status === 'open';
@@ -114,7 +124,7 @@ export function MeetingScreen({ meeting, legs, initialPicks, initialNames, curre
       cancelled = true;
       if (channel !== undefined) void supabase.removeChannel(channel);
     };
-  }, [meeting.id, legs]);
+  }, [meeting.id, legs, router]);
 
   // Top up display names for members who joined after this page rendered.
   useEffect(() => {
@@ -153,7 +163,7 @@ export function MeetingScreen({ meeting, legs, initialPicks, initialNames, curre
   const mySelections = picks.filter((p) => p.user_id === currentUserId).length;
 
   const results: UserResult[] = useMemo(() => {
-    if (meeting.status !== 'settled') return [];
+    if (status !== 'settled') return [];
     const scoringLegs: ScoringLeg[] = legs.map((l) => ({
       legNumber: l.leg_number,
       winnerNumber: l.winner_number,
@@ -168,7 +178,7 @@ export function MeetingScreen({ meeting, legs, initialPicks, initialNames, curre
         runnerNumber: p.runner_number,
       })),
     );
-  }, [meeting.status, legs, picks]);
+  }, [status, legs, picks]);
 
   // ── Actions ────────────────────────────────────────────────────────────────
   async function addPick(leg: Leg, runnerNumber: number, runnerName: string): Promise<void> {
@@ -226,7 +236,7 @@ export function MeetingScreen({ meeting, legs, initialPicks, initialNames, curre
       <div>
         <div className="flex items-center justify-between gap-2">
           <h1 className="truncate text-xl font-bold tracking-tight">{meeting.track}</h1>
-          <StatusBadge status={meeting.status} />
+          <StatusBadge status={status} />
         </div>
         <div className="mt-0.5 flex items-center gap-2 text-sm text-slate-600">
           <span>{formatDate(meeting.meeting_date)}</span>
@@ -255,7 +265,7 @@ export function MeetingScreen({ meeting, legs, initialPicks, initialNames, curre
             {locking ? 'Locking…' : 'Lock picks'}
           </button>
         )}
-        {meeting.status === 'locked' && (
+        {status === 'locked' && (
           <Link
             href={`/meetings/${meeting.id}/settle`}
             className="tap inline-flex items-center rounded-md bg-sky-600 px-2.5 py-1 text-xs font-semibold text-white"
@@ -269,7 +279,7 @@ export function MeetingScreen({ meeting, legs, initialPicks, initialNames, curre
 
       {!isOpen && (
         <p className="rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-600">
-          {meeting.status === 'locked'
+          {status === 'locked'
             ? 'Picks are locked. Waiting on results.'
             : 'Settled — final numbers below.'}
         </p>
@@ -291,7 +301,7 @@ export function MeetingScreen({ meeting, legs, initialPicks, initialNames, curre
           />
         ))}
 
-      {meeting.status === 'settled' && <ResultsTable results={results} names={names} />}
+      {status === 'settled' && <ResultsTable results={results} names={names} />}
     </div>
   );
 }

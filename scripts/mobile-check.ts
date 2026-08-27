@@ -81,8 +81,10 @@ async function main(): Promise<void> {
     check('pick form is inline on the meeting screen (≤3 taps to add)', inputCount === 4, `${inputCount} leg forms`);
     await page.type('input[aria-label="Runner number for leg 1"]', '4');
     await page.type('input[aria-label="Runner name for leg 1"]', 'Mobility');
-    // Each leg's add-form has its own submit button; the first belongs to leg 1.
-    await page.click('form button[type="submit"]');
+    // Scope to the form that owns leg 1's fields — `form button[type="submit"]`
+    // matches the header's sign-out form first and logs the session out.
+    const LEG1_ADD = 'form:has(input[aria-label="Runner number for leg 1"]) button[type="submit"]';
+    await page.click(LEG1_ADD);
 
     await page.waitForFunction(() => document.body.innerText.includes('Mobility'), { timeout: 10000 });
     check('added pick appears immediately', true);
@@ -97,7 +99,7 @@ async function main(): Promise<void> {
 
     // Duplicate pick → visible error, not silence.
     await page.type('input[aria-label="Runner number for leg 1"]', '4');
-    await page.click('form button[type="submit"]');
+    await page.click(LEG1_ADD);
     const dupError = await page
       .waitForFunction(() => document.body.innerText.includes('already have'), { timeout: 8000 })
       .then(() => true)

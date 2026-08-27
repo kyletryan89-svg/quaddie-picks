@@ -82,3 +82,45 @@ Also note: this bug is why the first run of the M4 script reported "create did n
 ### Deferred out of M4
 
 - ⏸ **Tap targets ≥44px** (SPEC §6 prose; not an R1/R6 rubric checkbox). Measured on both M4 screens: smallest interactive element is the header brand link `QuaddiePicks` at **24px**. Header is shared chrome — deferred to **M8** (the mobile pass), recorded here as a `[NOTE]` in the M4 script output rather than silently passed.
+
+---
+
+## M5 — Meeting screen: picks CRUD, realtime, live outlay counter (R5, R6)
+
+Verified 2026-08-28 via `npm run test:m5` (new script, `scripts/m5-check.ts`). Drives **two independent browser contexts** — separate cookie jars, therefore two separate anonymous users — at 390×844 against the live hosted Supabase project, with service-role reads for database truth. **29/29 checks green.**
+
+Realtime is not inferred from source: every "live" claim is backed by a `framenavigated` counter proving the receiving page performed **zero navigations** while the change arrived.
+
+| Ms | Rubric | Item | Result | Evidence |
+|----|--------|------|--------|----------|
+| M5 | R5 | Two browser sessions with different names can both log in | ✅ PASS | Two contexts logged in as distinct users; service-role read confirms 2 distinct profile rows |
+| M5 | R5 | Session A adds a pick; session B sees it appear **without reloading** | ✅ PASS | B's DOM gained "Winx The Second" after A's insert, with **0 navigations** on B; both screens reported `● live` first |
+| M5 | R5 | Session B cannot delete session A's pick | ✅ PASS | Two layers: B's UI renders remove controls only for B's own 3 tips; and a **real DELETE carrying B's own session JWT** (lifted from B's cookie jar) against A's pick returned `HTTP 200 []` — RLS matched no row, so nothing was deleted. Service-role read: A's row still present, still on screen |
+| M5 | R5 | Locking the meeting disables pick entry in both sessions | ✅ PASS | A locks → B's 4 add-forms drop to 0 with **0 navigations**; A's forms also 0; DB status = `locked`. B's badge reads LOCKED and the banner reads "Picks are locked. Waiting on results." *(Lock button lives on this screen; the settle flow itself is M6.)* |
+| M5 | R6 | Meeting screen usable at 390px, no horizontal scroll | ✅ PASS | `scrollWidth=390` both open and locked |
+| M5 | R6 | Adding a pick takes ≤3 taps from the meeting screen | ✅ PASS | 4 inline add-forms, one under each leg — tap number field, type, tap Add. Zero navigation to add a pick |
+| M5 | R6 | Who-picked-what legible at a glance without tapping | ✅ PASS | A's initials `AA` render on the runner row in B's view with no interaction; when A and B both take #7 the one row shows `AA` **and** `BB` |
+| M5 | R6 | Own selection count and outlay visible while picking | ✅ PASS | Sticky counter reads "Your tips: 0 / Outlay so far: $0.00" before any picking, then "Your tips: 3 / Outlay so far: $3.00" live as B adds. Counts the viewer's own tips only — B's counter stayed at 0 while showing A's pick |
+| M5 | R6 | Loading and empty states exist | ✅ PASS | Suspense skeleton asserted to clear; all 4 legs show "No tips yet — open the batting." rather than blank space |
+| M5 | R6 | Errors surface as visible messages, never silent console logs | ✅ PASS | Duplicate runner in the same leg → visible `[role="alert"]`: "You already have #7 in leg 1." |
+| M5 | — | Removing your own pick works and propagates live | ✅ PASS | A's removal vanished from B's screen with **0 navigations**; service-role read confirms the row is gone |
+
+### Bugs found by executing M5 (all fixed)
+
+1. **Realtime DELETEs reached nobody — the live board never un-picked.** A removing a tip stayed on A's screen only; everyone else kept showing it until they reloaded. Root cause proved by probe, not guessed: with the default `REPLICA IDENTITY`, a DELETE's WAL record carries only the primary key, so Realtime cannot evaluate the screen's `filter: leg_id=in.(…)` against the deleted row and drops the event. The probe ran two channels side by side — unfiltered received the DELETE, filtered received nothing. Fixed by migration `supabase/migrations/20260828000000_picks_replica_identity.sql` (`alter table public.picks replica identity full`), pushed with `supabase db push --linked`. Re-ran the probe: filtered channel now receives the DELETE. Logged as **D10**.
+2. **The screen mixed live status with the stale server prop.** `status` (state, updated by realtime) drove the forms, but the badge, the banner and the results table still read `meeting.status`, frozen at server-render time. So when another member locked, the reader saw entry disabled while the badge still said OPEN and the banner said **"Settled — final numbers below."** — flatly wrong. All six reads switched to the live value; regression checks assert B sees LOCKED *and* is not told it is settled.
+3. **The locking member's own screen depended on a realtime round-trip.** `status` was seeded from the prop by `useState`, so the `router.refresh()` after a lock could not update it. Added React's adjust-state-during-render pattern to adopt a status the server reports. (The `useEffect` form of this trips `react-hooks/set-state-in-effect` under the React Compiler lint rules.)
+4. **`scripts/mobile-check.ts` would have logged itself out.** It clicked `form button[type="submit"]`, which matches the header's sign-out form before any leg's add-form. Scoped to the leg-1 form. (Same trap bit the first M4 run.) Fixed now so M8 does not inherit it.
+
+### Regression runs after the schema change
+
+`npm run verify` ✓ (typecheck · lint clean, 0 warnings · 11/11 unit) · `npm run build` ✓ · **R2 security 15/15** · **R3 auth 9/9** · **M4 25/25** — all re-executed after `replica identity full` to prove RLS and the earlier milestones were unaffected.
+
+### Housekeeping
+
+Deleted the six one-off diagnostic scripts now that what they were chasing is fixed: `db-check.mts`, `debug-authtest.mts`, `debug-matrix.mts`, `debug-realtime.mts`, `debug-split.mts`, `debug-delete.mts`.
+
+### Still open (not M5's rubric)
+
+- ⏸ Tap targets ≥44px — header brand link measures 24px. Carried forward to **M8**.
+- ➖ R5's remaining two items (settling produces a correct result table; leaderboard aggregates two settled meetings) belong to **M6/M7** and were not attempted.

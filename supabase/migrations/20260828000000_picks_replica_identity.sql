@@ -1,0 +1,13 @@
+-- Realtime DELETE events on picks were reaching nobody.
+--
+-- The meeting screen subscribes with `filter: leg_id=in.(…)` so it only hears
+-- about its own meeting. Under the default REPLICA IDENTITY (primary key only),
+-- the WAL record for a DELETE carries just `id` — `leg_id` is absent, so
+-- Realtime cannot evaluate that filter against the deleted row and drops the
+-- event. Removing a tip then stayed on the remover's screen until everyone else
+-- reloaded, which defeats the point of the live board.
+--
+-- REPLICA IDENTITY FULL puts every column of the old row into the WAL, so the
+-- filter matches and DELETEs broadcast like INSERTs do. Cost is a slightly
+-- larger WAL record on a table this group will never fill.
+alter table public.picks replica identity full;
