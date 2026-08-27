@@ -13,9 +13,14 @@ interface LegInput {
 
 export function SettleForm({ meetingId, legs }: { meetingId: string; legs: LegInput[] }) {
   const [state, formAction, pending] = useActionState(settleMeeting, initialState);
+  // React resets an uncontrolled form once its action resolves, so without this
+  // a rejected settle would wipe all twelve fields and the results would have to
+  // be typed again from the form guide. Re-seed from what the server echoed.
+  const submitted = state.values;
+  const formKey = submitted === undefined ? 'fresh' : JSON.stringify(submitted);
 
   return (
-    <form action={formAction} className="flex flex-col gap-4">
+    <form key={formKey} action={formAction} className="flex flex-col gap-4">
       <input type="hidden" name="meetingId" value={meetingId} />
 
       {legs.map((leg) => (
@@ -31,6 +36,7 @@ export function SettleForm({ meetingId, legs }: { meetingId: string; legs: LegIn
                 name={`winner${leg.legNumber}`}
                 inputMode="numeric"
                 required
+                defaultValue={submitted?.[`winner${leg.legNumber}`] ?? ''}
                 placeholder="#7"
                 className="tap w-full rounded-lg border border-slate-300 px-2 outline-none focus:border-slate-900"
               />
@@ -40,6 +46,7 @@ export function SettleForm({ meetingId, legs }: { meetingId: string; legs: LegIn
               <input
                 name={`name${leg.legNumber}`}
                 maxLength={40}
+                defaultValue={submitted?.[`name${leg.legNumber}`] ?? ''}
                 placeholder="Winner’s name"
                 className="tap w-full rounded-lg border border-slate-300 px-2 outline-none focus:border-slate-900"
               />
@@ -50,6 +57,7 @@ export function SettleForm({ meetingId, legs }: { meetingId: string; legs: LegIn
                 name={`sp${leg.legNumber}`}
                 inputMode="decimal"
                 required
+                defaultValue={submitted?.[`sp${leg.legNumber}`] ?? ''}
                 placeholder="4.50"
                 step="0.01"
                 min="1.01"

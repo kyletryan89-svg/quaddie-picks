@@ -93,7 +93,25 @@ export async function lockMeeting(meetingId: string): Promise<{ error?: string }
 
 export interface SettleState {
   error?: string;
+  /** Echoed back so a rejected settle does not wipe the form (see CreateMeetingState). */
+  values?: Record<string, string>;
 }
+
+/**
+ * A leg's field, as a runner-number range.
+ *
+ * The schema stores no field list — `legs` has a `race_number`, not a runner
+ * roster — and SPEC §6 fixes the settle screen at "winning runner number,
+ * runner name, and starting price. Nothing else", so there is nowhere to enter
+ * one. The only other per-leg runner data in the app is the set of runners
+ * members happened to tip, and validating against *that* would make it
+ * impossible to record the single most common real result: a winner nobody
+ * backed. SPEC R4 case 6 ("All losses. Nobody hits anything") requires exactly
+ * that state to be reachable, so the field is bounded by what a runner number
+ * can legally be, not by what anyone tipped.
+ */
+const FIELD_MIN = 1;
+const FIELD_MAX = 99;
 
 /**
  * Enter the four winners. winner_sp is TOTAL RETURN PER $1 (spec §2) — stored as
@@ -104,15 +122,25 @@ export async function settleMeeting(_prev: SettleState, formData: FormData): Pro
   if (auth === null) redirect('/login');
 
   const meetingId = String(formData.get('meetingId') ?? '');
+
+  // Echo every field back so a rejected settle keeps what was typed — React
+  // resets an uncontrolled form once its action resolves.
+  const values: Record<string, string> = {};
+  for (const legNumber of [1, 2, 3, 4]) {
+    for (const prefix of ['winner', 'name', 'sp']) {
+      values[`${prefix}${legNumber}`] = String(formData.get(`${prefix}${legNumber}`) ?? '');
+    }
+  }
+
   if (!/^[0-9a-f-]{36}$/i.test(meetingId)) {
-    return { error: 'Bad meeting reference.' };
+    return { error: 'Bad meeting reference.', values };
   }
 
   const supabase = await createSupabaseServerClient();
   const { data: meeting } = await supabase.from('meetings').select('status').eq('id', meetingId).maybeSingle();
-  if (meeting === null) return { error: 'Meeting not found.' };
+  if (meeting === null) return { error: 'Meeting not found.', values };
   if (meeting.status !== 'locked') {
-    return { error: 'Only a locked meeting can be settled.' };
+    return { error: 'Only a locked meeting can be settled.', values };
   }
 
   interface WinnerInput {
@@ -126,15 +154,55 @@ export async function settleMeeting(_prev: SettleState, formData: FormData): Pro
     const nameRaw = String(formData.get(`name${legNumber}`) ?? '').trim();
     const spRaw = String(formData.get(`sp${legNumber}`) ?? '').trim();
 
+    // ── Winner number: must be a whole number inside the leg's field ────────
+    if (numRaw === '') {
+      return { error: `Leg ${legNumber}: enter the winning runner number.`, values };
+    }
+    // Number('') is 0 and Number(' 7 ') is 7, so reject anything that is not a
+    // plain integer literal before trusting the numeric conversion.
+    if (!/^\d+$/.test(numRaw)) {
+      return {
+        error: `Leg ${legNumber}: runner number must be a whole number — “${numRaw}” is not.`,
+        values,
+      };
+    }
     const num = Number(numRaw);
-    if (!Number.isInteger(num) || num < 1 || num > 99) {
-      return { error: `Leg ${legNumber}: runner number must be a whole number (1–99).` };
+    if (!Number.isInteger(num) || num < FIELD_MIN || num > FIELD_MAX) {
+      return {
+        error: `Leg ${legNumber}: runner #${numRaw} is not in the field (runners are ${FIELD_MIN}–${FIELD_MAX}).`,
+        values,
+      };
+    }
+
+    // ── Starting price: must be a positive number, above 1.00 ───────────────
+    if (spRaw === '') {
+      return { error: `Leg ${legNumber}: enter the starting price.`, values };
     }
     const sp = Number(spRaw);
-    if (!Number.isFinite(sp) || sp <= 1 || sp > 1000) {
-      // SP is total return per $1, so it must exceed 1.00 by definition.
-      return { error: `Leg ${legNumber}: starting price must be above 1.00 (it is total return per $1).` };
+    if (!Number.isFinite(sp)) {
+      return {
+        error: `Leg ${legNumber}: starting price must be a number — “${spRaw}” is not.`,
+        values,
+      };
     }
+    if (sp <= 0) {
+      return {
+        error: `Leg ${legNumber}: starting price must be a positive number, not ${spRaw}.`,
+        values,
+      };
+    }
+    if (sp <= 1) {
+      // SP is TOTAL RETURN per $1 including the stake (SPEC §2), so any real
+      // price is strictly above 1.00 — 1.00 itself would mean a free bet.
+      return {
+        error: `Leg ${legNumber}: starting price must be above 1.00 — it is total return per $1, stake included.`,
+        values,
+      };
+    }
+    if (sp > 1000) {
+      return { error: `Leg ${legNumber}: starting price of ${spRaw} looks like a typo.`, values };
+    }
+
     winners[legNumber] = {
       winner_number: num,
       winner_name: nameRaw.length > 0 ? nameRaw : null,
@@ -149,7 +217,7 @@ export async function settleMeeting(_prev: SettleState, formData: FormData): Pro
       .eq('meeting_id', meetingId)
       .eq('leg_number', Number(legNumberStr));
     if (error !== null) {
-      return { error: `Leg ${legNumberStr}: ${error.message}` };
+      return { error: `Leg ${legNumberStr}: ${error.message}`, values };
     }
   }
 
@@ -159,7 +227,7 @@ export async function settleMeeting(_prev: SettleState, formData: FormData): Pro
     .eq('id', meetingId)
     .eq('status', 'locked');
   if (statusError !== null) {
-    return { error: `Winners saved but status change failed: ${statusError.message}` };
+    return { error: `Winners saved but status change failed: ${statusError.message}`, values };
   }
 
   revalidatePath(`/meetings/${meetingId}`);

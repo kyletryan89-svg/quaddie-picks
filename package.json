@@ -17,7 +17,9 @@
     "smoke": "tsx scripts/smoke-test.ts",
     "e2e": "tsx scripts/e2e-test.ts",
     "test:m4": "tsx scripts/m4-check.ts",
-    "test:m5": "tsx scripts/m5-check.ts"
+    "test:m5": "tsx scripts/m5-check.ts",
+    "test:delete-guard": "tsx scripts/delete-guard-check.ts",
+    "test:m6": "tsx scripts/m6-check.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

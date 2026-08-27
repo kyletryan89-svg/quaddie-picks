@@ -124,3 +124,82 @@ Deleted the six one-off diagnostic scripts now that what they were chasing is fi
 
 - ⏸ Tap targets ≥44px — header brand link measures 24px. Carried forward to **M8**.
 - ➖ R5's remaining two items (settling produces a correct result table; leaderboard aggregates two settled meetings) belong to **M6/M7** and were not attempted.
+
+---
+
+## Carried-over security re-verification — R5 delete guard
+
+**Challenge:** the M5 evidence was a `HTTP 200 []` response plus a service-role read. Neither is conclusive — an empty PostgREST body only says RLS matched no row *for the attacker*, and a service-role read bypasses RLS entirely. Neither shows the row is still there for the people who are supposed to see it.
+
+Re-verified 2026-08-28 with `npm run test:delete-guard` (`scripts/delete-guard-check.ts`), which reads the pick back **as user A, through A's own session and RLS**. **8/8 green — the row genuinely survived. No security failure.**
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| B's DELETE was a genuine attempt | ✅ PASS | Fired with B's own session JWT lifted from B's cookie jar → `HTTP 200 []` |
+| **SELECT as user A returns the row B tried to delete** | ✅ PASS | `GET /rest/v1/picks?id=eq.<id>` with **A's** JWT → `HTTP 200 [{"id":"edd83bc4…","runner_number":9,"runner_name":"Guarded Gelding","user_id":"20155465…"}]` — 1 row, visible to A under RLS |
+| The surviving row is intact, not a tombstone | ✅ PASS | Still A's `user_id`, still runner #9, name unchanged |
+| Served from the database, not React state | ✅ PASS | Full page reload → "Guarded Gelding" still rendered |
+| Still counted in A's outlay | ✅ PASS | "Your tips: 1 / Outlay so far: $1.00" after reload |
+| Attacker still sees it too | ✅ PASS | B's own reloaded screen still shows A's pick |
+
+---
+
+## M6 — Lock + settle + per-meeting result table (R4, R5)
+
+Verified 2026-08-28 via `npm run test:m6` (`scripts/m6-check.ts`). **32/32 green.**
+
+The meeting under test is **Example 3 of `docs/scoring-examples.md`** ("shotgun vs sharpshooter") reproduced end to end through the real UI. The expected numbers are transcribed into the script by hand from that document — not read out of the code — and **three things are required to agree**: the hand-computed document, `scoreMeeting()` (the authority), and what the settled screen actually renders.
+
+| Ms | Rubric | Item | Result | Evidence |
+|----|--------|------|--------|----------|
+| M6 | R4 | No function computes a quaddie dividend, ticket cost, or combination count | ✅ PASS | grep for `dividend\|combination\|permutation\|factorial\|ticket\|nCr` across app/lib/components/scripts/tests → 0 matches |
+| M6 | R5 | Locking the meeting disables pick entry in both sessions | ✅ PASS | Lock via the UI button → DB `status='locked'`; "Enter results" appears. (Both-sessions propagation re-verified by the M5 suite in this run's regression: 29/29) |
+| M6 | R5 | **Settling produces a result table matching a hand-computed expected result** | ✅ PASS | Rendered rows, verbatim: Tommo `["24","$24.00","4/4","$40.30","+16.30","🎯2🧹"]` · Davo `["4","$4.00","2/4","$36.00","+32.00","—"]` — cell for cell identical to the document's Example 3 table |
+| M6 | R5 | `scoreMeeting()` agrees with the document | ✅ PASS | Tommo `{selections:24, outlay:24, legsHit:4, return:40.3, profit:16.2999…, soloLegs:2, fullCover:true}`; Davo `{selections:4, outlay:4, legsHit:2, return:36, profit:32, soloLegs:0, fullCover:false}` |
+| M6 | R5 | The document's punchline holds | ✅ PASS | Davo's profit 32.00 > Tommo's 16.30 **while** Tommo's legs-hit 4 > Davo's 2 — both reportable, per SPEC §2 |
+| M6 | — | Winners stored as typed; SP never converted to odds-to-one | ✅ PASS | `L1 #77@15 · L2 #2@1.9 · L3 #33@21 · L4 #4@2.4` read back from the DB |
+| M6 | — | Result table sorted by profit descending | ✅ PASS | Rendered order: Davo → Tommo |
+| M6 | — | Each leg displays its winner and SP | ✅ PASS | All four `#runner` + `$SP` strings present on the settled screen; SETTLED badge shown |
+| M6 | — | Other members see the identical table | ✅ PASS | Davo's own screen renders the same row (`+32.00`) |
+| M6 | — | An already-settled meeting cannot be settled again | ✅ PASS | `/meetings/<id>/settle` redirects to `/meetings/<id>` |
+| M6 | R6 | Settled meeting screen at 390px | ✅ PASS | `scrollWidth=390` |
+
+### Settle-screen input rejection (explicitly required this run)
+
+All nine rejections executed against the live server; each produced a visible `[role="alert"]`:
+
+| Input | Rejected with |
+|-------|---------------|
+| winner `abc` | "runner number must be a whole number — “abc” is not." |
+| winner `1.5` | "runner number must be a whole number — “1.5” is not." |
+| winner `-5` | "runner number must be a whole number — “-5” is not." |
+| winner `0` | "runner #0 is not in the field (runners are 1–99)." |
+| winner `100` | "runner #100 is not in the field (runners are 1–99)." |
+| SP `abc` | "starting price must be a number — “abc” is not." |
+| SP `0` | "starting price must be a positive number, not 0." |
+| SP `-3.5` | "starting price must be a positive number, not -3.5." |
+| SP `1.00` | "starting price must be above 1.00 — it is total return per $1, stake included." |
+
+And critically: after all nine rejections the meeting was **still `locked`**, and **no winner had been written to any leg** — a rejected settle never leaves the meeting half-settled.
+
+### Interpretation I had to make — "a winner number not in that leg's field"
+
+The instruction was to reject a winner number "not in that leg's field". **The schema stores no field.** `legs` has a `race_number`, not a runner roster, and SPEC §6 fixes the settle screen at *"winning runner number, runner name, and starting price. Nothing else"*, so there is nowhere to enter one.
+
+The only other per-leg runner data in the app is the set of runners members happened to tip. Validating against **that** was rejected as an interpretation because it would make the most common real result unrecordable — a winner nobody backed — and because **SPEC R4 case 6 ("All losses. Nobody hits anything") explicitly requires that state to be reachable**. A settle screen that refused untipped winners could never produce it.
+
+So "the field" is implemented as the runner-number range a runner number can legally take: **1–99**, named `FIELD_MIN`/`FIELD_MAX` in `app/actions/meetings.ts` with the reasoning in a comment. 99 rather than a tighter real-world cap (~24 starters) because the project's own worked examples use runner **#77** — a tighter bound would make `docs/scoring-examples.md` Example 3 unenterable, which this milestone's own verification proves is required. Logged as **D11**. Say the word if you meant the stricter tipped-runners-only rule and I will tighten it.
+
+### Bugs found by executing M6 (fixed)
+
+1. **A rejected settle wiped all twelve fields.** Same React 19 form-reset class as the M4 create form: one bad SP and the whole card of results had to be retyped. `SettleState` now echoes every submitted field back and `SettleForm` re-seeds its `defaultValue`s. Regression check asserts leg 2's winner and leg 3's SP survive a leg-1 rejection.
+2. **Validation was coarse and let bad input through the front door.** The old check was a single `Number()` conversion plus `sp <= 1`, so `Number(' 7 ')` and other loose forms slipped past, and every failure produced the same vague message. Rewritten with an integer-literal regex, distinct messages per failure mode, and explicit positive/above-evens SP rules.
+
+### Test-harness bugs found and fixed (not product bugs)
+
+- `submitSettle` clicked `form button[type="submit"]`, which matches the header's sign-out form first — the third time this trap has bitten. Scoped to the settle form.
+- The bad-input loop matched the *previous* rejection's alert text, scoring false passes for cases 2 and 3 and a false failure for case 4. Now waits for the alert text to actually change before asserting.
+
+### Regression before commit
+
+`npm run verify` ✓ · `npm run build` ✓ · R2 security **15/15** · R3 auth **9/9** · M4 **25/25** · M5 **29/29** · delete-guard **8/8**.
