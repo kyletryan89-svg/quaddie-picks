@@ -11,6 +11,7 @@
 
 import puppeteer, { type Browser, type Page } from 'puppeteer';
 import { createClient } from '@supabase/supabase-js';
+import { fieldFor, pasteField } from './test-field';
 import { loadEnvLocal } from './load-env';
 
 loadEnvLocal();
@@ -33,9 +34,9 @@ function requireEnv(key: string): string {
   return raw;
 }
 
-/** The add-pick form for a leg — scoped so it can never match the header's sign-out form. */
-function addForm(leg: number): string {
-  return `form:has(input[aria-label="Runner number for leg ${leg}"])`;
+/** Tap a runner in the leg's field. M8 removed free-text entry entirely. */
+function runnerButton(number: number, name: string, taken: boolean): string {
+  return `button[aria-label="${taken ? 'Remove' : 'Pick'} ${number} ${name}"]`;
 }
 
 async function scrollWidth(page: Page): Promise<number> {
@@ -57,11 +58,18 @@ async function login(browser: Browser, base: string, passcode: string, name: str
   return page;
 }
 
-/** Add a pick through the UI exactly as a user would. */
-async function addPick(page: Page, leg: number, number: string, name?: string): Promise<void> {
-  await page.type(`input[aria-label="Runner number for leg ${leg}"]`, number);
-  if (name !== undefined) await page.type(`input[aria-label="Runner name for leg ${leg}"]`, name);
-  await page.click(`${addForm(leg)} button[type="submit"]`);
+/** Select a runner by tapping it, exactly as a member does. */
+async function tapRunner(page: Page, number: number, name: string): Promise<void> {
+  const sel = runnerButton(number, name, false);
+  await page.waitForSelector(sel, { timeout: 15000 });
+  await page.click(sel);
+}
+
+/** Deselect one you already have — the same row, tapped again. */
+async function untapRunner(page: Page, number: number, name: string): Promise<void> {
+  const sel = runnerButton(number, name, true);
+  await page.waitForSelector(sel, { timeout: 15000 });
+  await page.click(sel);
 }
 
 /**
@@ -102,6 +110,7 @@ async function main(): Promise<void> {
   const base = requireEnv('BASE_URL').replace(/\/+$/, '');
   const passcode = requireEnv('GROUP_PASSCODE');
   const url = requireEnv('NEXT_PUBLIC_SUPABASE_URL');
+  const anonKey = requireEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY');
   const serviceKey = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
   const admin = createClient(url, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } });
 
@@ -136,29 +145,60 @@ async function main(): Promise<void> {
     // ── R6: loading + empty states on the meeting screen ────────────────────
     await pageB.goto(`${base}/meetings/${meetingId}`, { waitUntil: 'domcontentloaded' });
     await pageB.waitForFunction(() => document.querySelector('[aria-label="Loading"]') === null, { timeout: 20000 });
-    const emptyLegs = await bodyText(pageB);
+    const pasteBoxes = await pageB.$$eval('textarea[aria-label^="Paste the field for leg"]', (els) => els.length);
     check(
-      'R6: a leg with no picks shows an empty state, not blank space',
-      (emptyLegs.match(/No tips yet/g) ?? []).length === 4,
-      `${(emptyLegs.match(/No tips yet/g) ?? []).length}/4 legs`,
+      'R6: a leg with no field shows the paste box, not blank space',
+      pasteBoxes === 4,
+      `${pasteBoxes}/4 legs offer a paste box`,
     );
+    const emptyLegs = await bodyText(pageB);
 
     // ── R6: 390px, and the counter is visible BEFORE any picking ────────────
     const w = await scrollWidth(pageB);
     check('R6: meeting screen has no horizontal scroll at 390px', w <= 391, `scrollWidth=${w}`);
     check(
-      'R6: selections + outlay counter visible while picking (before settling)',
-      /Your tips:\s*0/.test(emptyLegs) && /Outlay so far:\s*\$0\.00/.test(emptyLegs),
-      emptyLegs.split('\n').filter((l) => /Your tips|Outlay/.test(l)).join(' / '),
+      'R6: own selection count visible while picking (before settling)',
+      /\b0 horses picked/.test(emptyLegs),
+      emptyLegs.split('\n').filter((l) => /picked/.test(l)).join(' / '),
     );
 
-    // ── R6: adding a pick is inline — no navigation, ≤3 interactions ────────
-    const legForms = await pageB.$$eval('form:has(input[aria-label^="Runner number for leg"])', (els) => els.length);
-    check('R6: an inline add-pick form sits under each of the 4 legs', legForms === 4, `${legForms} forms`);
+    // ── M8: give every leg a real field, then picking is tapping ────────────
+    const { data: legRows } = await admin
+      .from('legs')
+      .select('id, leg_number')
+      .eq('meeting_id', meetingId)
+      .order('leg_number');
+    const legIdByNumber = new Map<number, string>(
+      (legRows as Array<{ id: string; leg_number: number }>).map((l) => [l.leg_number, l.id]),
+    );
+    const tokenA = (await sessionTokenOf(pageA)) as string;
+    await pasteField({
+      url,
+      anonKey,
+      token: tokenA,
+      legId: legIdByNumber.get(1) as string,
+      runners: [{ number: 7, name: 'Winx The Second' }, ...fieldFor([1, 2, 3])],
+    });
+    for (const legNumber of [2, 3, 4]) {
+      await pasteField({
+        url,
+        anonKey,
+        token: tokenA,
+        legId: legIdByNumber.get(legNumber) as string,
+        runners: fieldFor([3, 7, 11]),
+      });
+    }
+
+    await pageB.reload({ waitUntil: 'networkidle0' });
+    await pageB.waitForFunction(() => document.querySelector('[aria-label="Loading"]') === null, { timeout: 20000 });
+    const tappable = await pageB.$$eval('button[aria-label^="Pick "]', (els) => els.length);
+    check('R6: every runner in every leg is a tap target (no free text anywhere)', tappable === 13, `${tappable} tappable runners`);
+    const freeText = await pageB.$$eval('input[aria-label^="Runner number"], input[aria-label^="Runner name"]', (els) => els.length);
+    check('M8: no free-text runner entry remains on the meeting screen', freeText === 0, `${freeText} free-text inputs`);
 
     // ── R5: A adds a pick, B sees it WITHOUT reloading ──────────────────────
     await pageA.goto(`${base}/meetings/${meetingId}`, { waitUntil: 'networkidle0' });
-    await pageA.waitForSelector('input[aria-label="Runner number for leg 1"]');
+    await pageA.waitForSelector('button[aria-label^="Pick "]');
     await pageA.waitForFunction(() => document.body.innerText.includes('● live'), { timeout: 20000 });
     await pageB.waitForFunction(() => document.body.innerText.includes('● live'), { timeout: 20000 });
     check('R5: both screens report a live realtime subscription', true);
@@ -166,9 +206,12 @@ async function main(): Promise<void> {
     const navsB = trackNavigations(pageB);
     const navsBefore = navsB();
 
-    await addPick(pageA, 1, '7', 'Winx The Second');
+    await tapRunner(pageA, 7, 'Winx The Second');
+    // Since M8 the runner NAME is always on screen — it is the field — so the
+    // arrival of A's PICK is A's initials chip appearing on that row, not the
+    // name appearing. Waiting on the name would pass without any realtime.
     const bSawIt = await pageB
-      .waitForFunction(() => document.body.innerText.includes('Winx The Second'), { timeout: 20000 })
+      .waitForFunction(() => document.body.innerText.includes('AA'), { timeout: 20000 })
       .then(() => true)
       .catch(() => false);
     check("R5: session B sees session A's pick appear WITHOUT reloading", bSawIt);
@@ -188,34 +231,31 @@ async function main(): Promise<void> {
 
     // ── R6: counter tracks the OWNER's picks, not everyone's ────────────────
     check(
-      "R6: B's counter still reads 0 — it counts B's own tips, not A's",
-      /Your tips:\s*0/.test(bView),
-      bView.split('\n').filter((l) => /Your tips/.test(l)).join(' '),
+      "R6: B's counter still reads 0 — it counts B's own picks, not A's",
+      /\b0 horses picked/.test(bView),
+      bView.split('\n').filter((l) => /picked/.test(l)).join(' '),
     );
 
-    // ── R5/R6: B adds picks; B's own counter and outlay move live ───────────
-    await addPick(pageB, 1, '7'); // same runner as A — duplicates are legal, both score
-    await pageB.waitForFunction(() => /Your tips:\s*1/.test(document.body.innerText), { timeout: 15000 });
-    await addPick(pageB, 2, '3');
-    await addPick(pageB, 3, '11');
-    await pageB.waitForFunction(() => /Your tips:\s*3/.test(document.body.innerText), { timeout: 15000 });
+    // ── R5/R6: B taps three runners; B's own count moves live ──────────────
+    await tapRunner(pageB, 7, 'Winx The Second'); // same runner as A — both score it in full
+    await pageB.waitForFunction(() => /\b1 horse picked/.test(document.body.innerText), { timeout: 15000 });
+    await tapRunner(pageB, 3, 'Runner 3');
+    await tapRunner(pageB, 11, 'Runner 11');
+    await pageB.waitForFunction(() => /\b3 horses picked/.test(document.body.innerText), { timeout: 15000 });
     const bAfter = await bodyText(pageB);
     check(
-      'R6: counter and outlay update live as picks go in (3 tips → $3.00)',
-      /Your tips:\s*3/.test(bAfter) && /Outlay so far:\s*\$3\.00/.test(bAfter),
-      bAfter.split('\n').filter((l) => /Your tips|Outlay/.test(l)).join(' / '),
+      'R6: the count updates live as picks go in (3 horses picked) and shows no money',
+      /\b3 horses picked/.test(bAfter) && !bAfter.includes('$') && !/outlay/i.test(bAfter),
+      bAfter.split('\n').filter((l) => /picked/.test(l)).join(' / '),
     );
 
-    // Duplicate runner in the same leg for the same user → visible error.
-    await addPick(pageB, 1, '7');
-    const dupErr = await pageB
-      .waitForFunction(() => {
-        const alerts = [...document.querySelectorAll('[role="alert"]')];
-        return alerts.some((a) => (a as HTMLElement).innerText.includes('already have'));
-      }, { timeout: 15000 })
-      .then(() => true)
-      .catch(() => false);
-    check('R6: a duplicate pick surfaces a visible inline error, never a silent console log', dupErr);
+    // M8 replaces the duplicate-pick error with a toggle: tapping a runner you
+    // already hold removes it, so a duplicate is now unrepresentable.
+    await untapRunner(pageB, 11, 'Runner 11');
+    await pageB.waitForFunction(() => /\b2 horses picked/.test(document.body.innerText), { timeout: 15000 });
+    await tapRunner(pageB, 11, 'Runner 11');
+    await pageB.waitForFunction(() => /\b3 horses picked/.test(document.body.innerText), { timeout: 15000 });
+    check('M8: tapping a runner you already hold removes it, so duplicates cannot happen', true);
 
     // A and B both on #7 in leg 1 — the row must show BOTH sets of initials.
     const bothChips = await pageB.evaluate(
@@ -231,12 +271,13 @@ async function main(): Promise<void> {
     const aPickId = ((aPickRows ?? [])[0] as { id: string } | undefined)?.id ?? '';
     check("R5: A's pick exists in the database to attempt a delete against", aPickId !== '');
 
-    // (a) B's UI offers no remove control for A's pick.
-    const removeButtonsOnB = await pageB.$$eval('button[aria-label^="Remove your tip"]', (els) => els.length);
+    // (a) B's UI offers a remove action only for B's own picks; A's pick on the
+    // shared runner is a chip B cannot act on.
+    const removeButtonsOnB = await pageB.$$eval('button[aria-label^="Remove "]', (els) => els.length);
     check(
-      "R5: B's UI exposes remove controls only for B's own tips",
+      "R5: B's UI exposes remove controls only for B's own picks",
       removeButtonsOnB === 3,
-      `${removeButtonsOnB} remove buttons for B's 3 tips`,
+      `${removeButtonsOnB} remove controls for B's 3 picks`,
     );
 
     // (b) The real test: fire a genuine DELETE carrying B's OWN session JWT,
@@ -248,7 +289,7 @@ async function main(): Promise<void> {
     const restDelete = await fetch(`${url}/rest/v1/picks?id=eq.${aPickId}`, {
       method: 'DELETE',
       headers: {
-        apikey: requireEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY'),
+        apikey: anonKey,
         Authorization: `Bearer ${bToken ?? ''}`,
         Prefer: 'return=representation',
       },
@@ -263,12 +304,13 @@ async function main(): Promise<void> {
       `${(survived ?? []).length} rows remain; RLS matched no row for B so the delete removed nothing`,
     );
 
-    // A's pick is still on screen for both.
-    check("R5: A's pick is still visible after B's delete attempt", (await bodyText(pageB)).includes('Winx The Second'));
+    // A's pick is still on screen for both. The runner NAME is now always shown
+    // (it is the field), so the proof is A's initials chip on that row.
+    check("R5: A's pick is still visible after B's delete attempt", (await bodyText(pageB)).includes('AA'));
 
     // ── M5: removing your OWN pick works and propagates live ────────────────
     const navsBefore2 = navsB();
-    await pageA.click('button[aria-label="Remove your tip #7"]');
+    await pageA.click('button[aria-label="Remove 7 Winx The Second"]');
     const bSawRemoval = await pageB
       .waitForFunction(() => !document.body.innerText.includes('AA'), { timeout: 20000 })
       .then(() => true)
@@ -285,7 +327,9 @@ async function main(): Promise<void> {
     await pageA.click('button::-p-text(Lock picks)');
     const bWentReadOnly = await pageB
       .waitForFunction(
-        () => document.querySelectorAll('form:has(input[aria-label^="Runner number for leg"])').length === 0,
+        () =>
+          document.querySelectorAll('button[aria-label^="Pick "], button[aria-label^="Remove "]').length === 0 &&
+          document.querySelectorAll('textarea[aria-label^="Paste the field"]').length === 0,
         { timeout: 20000 },
       )
       .then(() => true)
@@ -293,8 +337,11 @@ async function main(): Promise<void> {
     check('R5: locking removes pick entry from session B without a reload', bWentReadOnly);
     check('R5: B saw the lock live', navsB() === navsBefore3, `${navsB() - navsBefore3} navigations`);
 
-    const aFormsAfterLock = await pageA.$$eval('form:has(input[aria-label^="Runner number for leg"])', (els) => els.length);
-    check('R5: locking removes pick entry from session A too', aFormsAfterLock === 0, `${aFormsAfterLock} forms left`);
+    const aControlsAfterLock = await pageA.$$eval(
+      'button[aria-label^="Pick "], button[aria-label^="Remove "], textarea[aria-label^="Paste the field"]',
+      (els) => els.length,
+    );
+    check('R5: locking removes pick entry from session A too', aControlsAfterLock === 0, `${aControlsAfterLock} controls left`);
 
     const bLockedText = await bodyText(pageB);
     check(

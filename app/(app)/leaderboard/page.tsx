@@ -6,7 +6,7 @@ import { buildLeaderboard, sortLeaderboard, type LeaderboardSort } from '@/lib/l
 import { getProfiles, getSeasonSettledBundles } from '@/lib/queries';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { seasonFor, seasonFromLabel, seasonsCovering } from '@/lib/season';
-import type { ScoringLeg, ScoringPick } from '@/lib/scoring';
+import { toScoringLegs, toScoringPicks } from '@/lib/meeting-score';
 
 export const dynamic = 'force-dynamic';
 
@@ -149,20 +149,10 @@ async function LeaderboardLoader({ searchParams }: PageProps) {
 async function loadTable(season: ReturnType<typeof seasonFor>, current: ReturnType<typeof seasonFor>) {
   const [bundles, profiles] = await Promise.all([getSeasonSettledBundles(season), getProfiles()]);
 
-  const scored = bundles.map((b) => {
-    const legIdToNumber = new Map<string, number>(b.legs.map((l) => [l.id, l.leg_number]));
-    const legs: ScoringLeg[] = b.legs.map((l) => ({
-      legNumber: l.leg_number,
-      winnerNumber: l.winner_number,
-      winnerSp: l.winner_sp === null ? null : Number(l.winner_sp),
-    }));
-    const picks: ScoringPick[] = b.picks.map((p) => ({
-      userId: p.user_id,
-      legNumber: legIdToNumber.get(p.leg_id) ?? 0,
-      runnerNumber: p.runner_number,
-    }));
-    return { legs, picks };
-  });
+  const scored = bundles.map((b) => ({
+    legs: toScoringLegs(b.legs),
+    picks: toScoringPicks(b.legs, b.runners, b.picks),
+  }));
 
   const roster = profiles.map((p) => ({ id: p.id, displayName: p.display_name }));
 

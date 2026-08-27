@@ -1,5 +1,5 @@
 // Database row shapes used across the app. Hand-maintained to mirror
-// supabase/migrations/*.sql exactly — there are only four tables.
+// supabase/migrations/*.sql exactly.
 
 export type MeetingStatus = 'open' | 'locked' | 'settled';
 
@@ -31,11 +31,21 @@ export interface Leg {
   winner_sp: string | null;
 }
 
+/** One runner in a leg's field, pasted in by a member (M8). */
+export interface Runner {
+  id: string;
+  leg_id: string;
+  runner_number: number;
+  runner_name: string | null;
+  scratched: boolean;
+  created_at: string;
+}
+
+/** A member's selection: a pointer at a runner, never free text. */
 export interface Pick {
   id: string;
   leg_id: string;
   user_id: string;
-  runner_number: number;
-  runner_name: string | null;
+  runner_id: string;
   created_at: string;
 }

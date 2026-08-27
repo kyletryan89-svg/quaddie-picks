@@ -26,6 +26,7 @@ import { createClient } from '@supabase/supabase-js';
 import { buildLeaderboard, sortLeaderboard } from '../lib/leaderboard';
 import type { ScoringLeg, ScoringPick } from '../lib/scoring';
 import { seasonFor } from '../lib/season';
+import { fieldFor, pasteField, pickRunners } from './test-field';
 import { loadEnvLocal } from './load-env';
 
 loadEnvLocal();
@@ -176,25 +177,36 @@ async function main(): Promise<void> {
         (legRows as Array<{ id: string; leg_number: number }>).map((l) => [l.leg_number, l.id]),
       );
 
+      // M8: give each leg its field first — a pick points at a runner now. The
+      // field is the union of both slips plus the winner for that leg.
+      const runnerIdByLeg = new Map<number, Map<number, string>>();
+      for (const legNumber of [1, 2, 3, 4]) {
+        const numbers = [
+          ...slips.flatMap(({ slip }) => slip[legNumber] ?? []),
+          winners[legNumber - 1]!.runner,
+        ];
+        runnerIdByLeg.set(
+          legNumber,
+          await pasteField({
+            url,
+            anonKey,
+            token: tokenT,
+            legId: legIdByNumber.get(legNumber) as string,
+            runners: fieldFor(numbers),
+          }),
+        );
+      }
+
       // Each slip written with that punter's own session, so RLS still gates it.
       for (const { token, userId, slip } of slips) {
-        const rows: Array<Record<string, unknown>> = [];
+        const rows: Array<{ legId: string; runnerId: string }> = [];
         for (const [legNumber, runners] of Object.entries(slip)) {
+          const ids = runnerIdByLeg.get(Number(legNumber)) as Map<number, string>;
           for (const runner of runners) {
-            rows.push({ leg_id: legIdByNumber.get(Number(legNumber)), user_id: userId, runner_number: runner });
+            rows.push({ legId: legIdByNumber.get(Number(legNumber)) as string, runnerId: ids.get(runner) as string });
           }
         }
-        const res = await fetch(`${url}/rest/v1/picks`, {
-          method: 'POST',
-          headers: {
-            apikey: anonKey,
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            Prefer: 'return=representation',
-          },
-          body: JSON.stringify(rows),
-        });
-        const stored = ((await res.json()) as unknown[]).length;
+        const stored = await pickRunners({ url, anonKey, token, userId, rows });
         if (stored !== rows.length) throw new Error(`${label}: stored ${stored} of ${rows.length} picks`);
       }
 

@@ -4,7 +4,7 @@
 
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import type { Season } from '@/lib/season';
-import type { Leg, Meeting, Pick, Profile } from '@/lib/types';
+import type { Leg, Meeting, Pick, Profile, Runner } from '@/lib/types';
 
 export interface MeetingSummary {
   meeting: Meeting;
@@ -60,6 +60,8 @@ export async function getSeasonMeetings(season: Season): Promise<MeetingSummary[
 export interface MeetingBundle {
   meeting: Meeting;
   legs: Leg[];
+  /** Every leg's field. A leg with none has not had a field pasted yet. */
+  runners: Runner[];
   picks: Pick[];
   /** userId → display name */
   names: Map<string, string>;
@@ -78,18 +80,16 @@ export async function getMeetingBundle(meetingId: string): Promise<MeetingBundle
     .order('leg_number');
   const legs = (legRows ?? []) as Leg[];
 
-  // PostgREST rejects an empty `in.()` list; a leg-less meeting just has no picks.
-  const { data: pickRows } =
+  // PostgREST rejects an empty `in.()` list; a leg-less meeting just has no
+  // picks and no field.
+  const legIds = legs.map((l) => l.id);
+  const [{ data: pickRows }, { data: runnerRows }] =
     legs.length === 0
-      ? { data: [] }
-      : await supabase
-          .from('picks')
-          .select('*')
-          .in(
-            'leg_id',
-            legs.map((l) => l.id),
-          )
-          .order('created_at');
+      ? [{ data: [] }, { data: [] }]
+      : await Promise.all([
+          supabase.from('picks').select('*').in('leg_id', legIds).order('created_at'),
+          supabase.from('runners').select('*').in('leg_id', legIds).order('runner_number'),
+        ]);
 
   const { data: profiles } = await supabase.from('profiles').select('id, display_name');
   const names = new Map<string, string>();
@@ -100,6 +100,7 @@ export async function getMeetingBundle(meetingId: string): Promise<MeetingBundle
   return {
     meeting: meeting as Meeting,
     legs,
+    runners: (runnerRows ?? []) as Runner[],
     picks: (pickRows ?? []) as Pick[],
     names,
   };

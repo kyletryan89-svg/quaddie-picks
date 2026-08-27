@@ -109,10 +109,22 @@ async function main(): Promise<void> {
     if (legRows.length !== 4) throw new Error('cannot proceed without legs');
     const leg1 = legRows.find((l) => l.leg_number === 1)!;
 
+    // M8: a pick points at a runner, so leg 1 needs a field before anyone can
+    // pick in it. Runners are insertable by any authenticated member.
+    const field = await clientA
+      .from('runners')
+      .insert(
+        [3, 9, 12].map((n) => ({ leg_id: leg1.id, runner_number: n, runner_name: `${tag}-Runner ${n}` })),
+      )
+      .select('id, runner_number');
+    check('authenticated member can paste a field (positive control)', field.error === null && (field.data ?? []).length === 3);
+    const runnerId = (n: number): string =>
+      ((field.data ?? []) as Array<{ id: string; runner_number: number }>).find((r) => r.runner_number === n)!.id;
+
     // ── positive controls while open ──
     const ownPick = await clientA
       .from('picks')
-      .insert({ leg_id: leg1.id, user_id: userA, runner_number: 3, runner_name: `${tag}-Runner` });
+      .insert({ leg_id: leg1.id, user_id: userA, runner_id: runnerId(3) });
     check('own pick into OPEN meeting accepted', ownPick.error === null);
 
     const visible = await clientB.from('picks').select('*').eq('user_id', userA);
@@ -121,7 +133,7 @@ async function main(): Promise<void> {
     // ── R2.3: user B cannot insert a pick carrying user A’s identity ──
     const forged = await clientB
       .from('picks')
-      .insert({ leg_id: leg1.id, user_id: userA, runner_number: 9, runner_name: `${tag}-Forged` });
+      .insert({ leg_id: leg1.id, user_id: userA, runner_id: runnerId(9) });
     check('cross-user pick insert rejected (B forging A’s user_id)', forged.error !== null);
 
     // NB: an RLS-blocked DELETE does not error — it silently affects zero rows —
@@ -138,7 +150,7 @@ async function main(): Promise<void> {
     check('member can lock the meeting', lock.error === null);
     const latePick = await clientA
       .from('picks')
-      .insert({ leg_id: leg1.id, user_id: userA, runner_number: 12, runner_name: `${tag}-TooLate` });
+      .insert({ leg_id: leg1.id, user_id: userA, runner_id: runnerId(12) });
     check('insert into LOCKED meeting rejected by database', latePick.error !== null);
 
     await clientA.from('picks').delete().eq('user_id', userA);

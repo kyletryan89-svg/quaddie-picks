@@ -34,6 +34,7 @@ async function MeetingLoader({ meetingId, currentUserId }: { meetingId: string; 
     <MeetingScreen
       meeting={bundle.meeting}
       legs={bundle.legs}
+      initialRunners={bundle.runners}
       initialPicks={bundle.picks}
       initialNames={names}
       currentUserId={currentUserId}

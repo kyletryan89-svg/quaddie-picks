@@ -12,7 +12,6 @@
     "verify": "npm run typecheck && npm run lint && npm run test",
     "test:security": "tsx scripts/security-tests.ts",
     "test:auth": "tsx scripts/auth-test.ts",
-    "test:mobile": "tsx scripts/mobile-check.ts",
     "seed": "tsx scripts/seed.ts",
     "smoke": "tsx scripts/smoke-test.ts",
     "e2e": "tsx scripts/e2e-test.ts",
@@ -20,7 +19,8 @@
     "test:m5": "tsx scripts/m5-check.ts",
     "test:delete-guard": "tsx scripts/delete-guard-check.ts",
     "test:m6": "tsx scripts/m6-check.ts",
-    "test:m7": "tsx scripts/m7-check.ts"
+    "test:m7": "tsx scripts/m7-check.ts",
+    "test:m8": "tsx scripts/m8-check.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

@@ -249,3 +249,88 @@ The fixtures are deliberately built so **Tommo hits more legs while Davo makes m
 R1 ✅ · R2 ✅ · R3 ✅ · R4 ✅ · **R5 ✅ complete — all six items now executed** · R6 partial (M8) · R7 not started (M9).
 
 Carried into **M8**: tap targets ≥44px (header brand link measures 24px), plus the full R6 sweep across every screen.
+
+---
+
+## M8 — Real fields and tap-to-pick (replaces the mobile-pass M8)
+
+Verified 2026-08-28 via `npm run test:m8` (`scripts/m8-check.ts`) plus 15 new unit tests for the parser. **34/34 browser+DB checks green, 26/26 unit tests green.**
+
+### 1. Schema
+
+New migration `supabase/migrations/20260828010000_runners.sql`, pushed with `supabase db push --linked`.
+
+| Item | Result | Evidence |
+|------|--------|----------|
+| `runners` table: id, leg_id (fk, cascade), runner_number, runner_name, scratched default false, unique(leg_id, runner_number) | ✅ PASS | Member insert → `HTTP 201`, `scratched` came back `false`; duplicate number → `HTTP 409` |
+| RLS: authenticated select | ✅ PASS | Member's own JWT read back both rows |
+| RLS: authenticated insert | ✅ PASS | `HTTP 201` on a member-signed insert |
+| RLS: **no delete from client** | ✅ PASS | A real `DELETE` with the member's own JWT left the row intact — still visible to that member afterwards |
+| `picks` references `runner_id`, not runner_number/runner_name | ✅ PASS | An insert using the old `runner_number` shape → `HTTP 400`, column gone |
+| A pick cannot point at a runner from another leg | ✅ PASS | Composite FK `(leg_id, runner_id) → runners(leg_id, id)` → `HTTP 409` |
+| **Migration preserved existing picks by matching on number** | ✅ PASS | All **84 picks** already in the database resolve to a runner **in their own leg**; **0 orphaned**. The field was reconstructed from the picks themselves, so every row matched and none had to be dropped |
+
+### 2. Paste the field
+
+| Item | Result | Evidence |
+|------|--------|----------|
+| Each leg gets a paste box while open | ✅ PASS | 4 boxes on a fresh meeting |
+| Accepts `7. Horse Name`, `7 Horse Name`, `7. Horse Name (5)` | ✅ PASS | Unit tests + the live preview parsed all three; the trailing barrier `(5)` was discarded while `Bob (NZ) Junior` kept its brackets |
+| Parses leniently, skips unparseable lines | ✅ PASS | Pasting a field with `Race 4 — 1200m Good 3` and `Scratchings: 9` mixed in → *"3 runners parsed · 2 lines skipped"*, both junk lines listed back |
+| Preview with a count **before** saving | ✅ PASS | Preview rendered and the database still held **0 runners** for that leg at that moment |
+| Saving stores the parsed field | ✅ PASS | `[{3,"Beta Blocker"},{7,"Winx The Second"},{11,"Gamma Ray"}]` — sorted, barrier stripped |
+| **Re-pasting replaces that leg's field** | ✅ PASS | Re-paste of `7` + `4` → field became exactly `[{4,"Late Scratching Replacement"},{7,"Winx The Second"}]` |
+| Re-paste keeps picks on surviving runners | ✅ PASS | Two picks held (#7, #3); after the re-paste dropped #3, picks left = `[7]`, and the on-screen count fell 2 → 1 |
+| Text that parses to nothing cannot be saved | ✅ PASS | *"0 runners parsed"* and the Save button was `disabled` |
+
+Parser is pure (`lib/field-parse.ts`, zero imports) with **15 unit tests** covering the three shapes, blank lines, junk lines, bare numbers, out-of-field numbers, duplicate numbers, sort order and alternative separators.
+
+### 3. The stripped screen
+
+Rendered screen text, verbatim from the run:
+
+> `M8 Park … | OPEN | Thu, 27 Aug 2026 | · | ● live | 1 horse picked | Lock picks | Leg 1· R2 | 1 picked | 4 | Late Scratching Replacement | 7 | Winx The Second | AA | Re-paste field | Leg 2· R3 | 0 picked | …`
+
+| Item | Result | Evidence |
+|------|--------|----------|
+| Shows only track, date, status and the four legs | ✅ PASS | Track, date, `OPEN` badge present; **exactly 4 `<section>` elements** — no fifth race |
+| Each leg is the field as a tappable list | ✅ PASS | Every runner is a `<button>`; 13 tap targets across 4 legs in the M5 run |
+| A row is runner number, name, and who picked it | ✅ PASS | The row's three children read exactly `["7","Winx The Second","AA"]` — nothing else |
+| Initials of **every** member who selected it | ✅ PASS | After B also took #7, the chip cell read `AABB` |
+| **No dollar amounts anywhere** | ✅ PASS | `$` does not occur in the screen text at all |
+| **The word "outlay" appears nowhere** | ✅ PASS | Case-insensitive match → none. `Your tips` framing also gone |
+| Header shows a plain count | ✅ PASS | *"1 horse picked"* (pluralised: *"24 horses picked"* in the M6 run) |
+| Per-leg count of your own selections | ✅ PASS | `["1 picked","0 picked","0 picked","0 picked"]` |
+| No race times, distances or race names | ✅ PASS | No `hh:mm`, no `1200m`, no `Good 3` — including the junk pasted into the box, which never reaches the field |
+| A leg with no field shows the paste box and nothing else | ✅ PASS | 0 runner rows on a fresh meeting, 4 paste boxes |
+| Login screen at 390px | ✅ PASS | `scrollWidth=390` (folded in from the retired `mobile-check.ts`) |
+| Meeting screen at 390px | ✅ PASS | `scrollWidth=390` |
+
+### 4. Rules
+
+- **Selections only by tapping.** `input[aria-label^="Runner number"]` / `"Runner name"` → **0 matches** on the meeting screen. Verified in both the M8 and M5 suites.
+- Tapping a runner you already hold **removes** it, so the old duplicate-pick error is now structurally impossible. Verified by toggling #11 off (3→2) and on again (2→3).
+
+### Two conflicts in the brief I had to resolve, both logged
+
+1. **"No delete from client" vs "re-pasting replaces that leg's field".** RLS cannot distinguish a server action from a browser — both carry the member's JWT — so a delete policy cannot be simultaneously absent and present. Resolved with a `security definer` RPC, `replace_leg_field()`, which holds the delete privilege while clients keep select+insert only; it refuses anonymous callers and any meeting that is not open. **D12**.
+2. **"Remove all dollar amounts from this screen entirely" vs the M6 regression.** That instruction sits in a section about the picking experience ("No currency, no cost framing"), but applied literally to the *settled* state it deletes the per-meeting result table — breaking rubric R5 and the M6 regression this same brief requires to pass. Money is now gone from every state a member picks in (open and locked); the settled result table and leg SPs remain. **D13**. Tell me if you want the settled view stripped too and I will move the result table to its own screen.
+
+### Prior verification scripts had to be migrated — unavoidable, and why
+
+M8 drops `picks.runner_number` and removes free-text entry. Those are exactly what the M0–M7 scripts wrote and typed, so the regression could not have run at all without migrating them. **Every assertion was preserved; only the drive mechanism changed** (paste a field, then tap, instead of typing a number). Logged as **D14**. New shared helper `scripts/test-field.ts` keeps the churn to a few lines per script.
+
+Two of my own test bugs surfaced while doing it, both fixed:
+
+- **A vacuous realtime check.** M5 proved "B sees A's pick" by waiting for the runner *name* — which since M8 is always on screen as part of the field, so it would pass with realtime switched off entirely. Now waits for A's initials chip, which is what actually arrives.
+- The same trap in `e2e-test.ts`, fixed the same way.
+
+`scripts/mobile-check.ts` was retired: it was the harness for the mobile-pass M8 that this milestone replaces, its meeting-screen half drove UI that no longer exists, and every check it made is now covered by the M4/M5/M7/M8 suites — except login-at-390px, which was folded into `m8-check.ts` rather than lost.
+
+`scripts/seed.ts` and `scripts/e2e-test.ts` were migrated to the new schema as well. They are M9's to *use*; this was repairing breakage M8 caused, not starting M9.
+
+### Full regression before commit
+
+`npm run verify` ✓ (typecheck · lint clean · **26/26** unit tests) · `npm run build` ✓ · R2 security **16/16** · R3 auth **9/9** · M4 **25/25** · M5 **30/30** · M6 **32/32** · M7 **15/15** · M8 **34/34** · delete-guard **8/8**. No regressions.
+
+No new dependencies. `REPLICA IDENTITY FULL` was not applied to any further table.

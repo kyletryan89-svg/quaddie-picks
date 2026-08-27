@@ -44,17 +44,31 @@ async function login(page: Page, base: string, passcode: string, name: string): 
   await page.waitForFunction(() => window.location.pathname === '/', { timeout: 15000 });
 }
 
-async function addPick(page: Page, legNumber: number, runnerNumber: number, runnerName: string): Promise<void> {
-  const numInputs = await page.$$('input[aria-label^="Runner number for leg"]');
-  const addButtons = await page.$$('button::-p-text(Add)');
-  const input = numInputs[legNumber - 1];
-  const button = addButtons[legNumber - 1];
-  if (input === undefined || button === undefined) throw new Error(`leg ${legNumber} inputs not found`);
-  await input.type(String(runnerNumber));
-  const nameInputs = await page.$$('input[aria-label^="Runner name for leg"]');
-  await (nameInputs[legNumber - 1] as import('puppeteer').ElementHandle<HTMLInputElement>).type(runnerName);
-  await button.click();
-  await page.waitForFunction((n) => document.body.innerText.includes(n), { timeout: 10000 }, runnerName);
+/**
+ * M8: selections are made by tapping a runner in the leg's field. The field must
+ * already have been pasted in — see pasteFields() below.
+ */
+async function addPick(page: Page, _legNumber: number, runnerNumber: number, runnerName: string): Promise<void> {
+  const sel = `button[aria-label="Pick ${runnerNumber} ${runnerName}"]`;
+  await page.waitForSelector(sel, { timeout: 15000 });
+  await page.click(sel);
+  await page.waitForSelector(`button[aria-label="Remove ${runnerNumber} ${runnerName}"]`, { timeout: 15000 });
+}
+
+/** Paste a field into every leg through the real paste box. */
+async function pasteFields(page: Page, fields: Record<number, Array<[number, string]>>): Promise<void> {
+  for (const [legNumber, runners] of Object.entries(fields)) {
+    const sel = `textarea[aria-label="Paste the field for leg ${legNumber}"]`;
+    await page.waitForSelector(sel, { timeout: 15000 });
+    await page.click(sel);
+    await page.type(sel, runners.map(([n, name]) => `${n}. ${name}`).join('\n'));
+    await page.click(`button[aria-label="Save field for leg ${legNumber}"]`);
+    await page.waitForFunction(
+      (n: string) => document.querySelector(`button[aria-label="Save field for leg ${n}"]`) === null,
+      { timeout: 20000 },
+      legNumber,
+    );
+  }
 }
 
 async function main(): Promise<void> {
@@ -112,6 +126,15 @@ async function main(): Promise<void> {
     const meetingPath = new URL(pageA.url()).pathname; // /meetings/<id>
     check('A creates a meeting with 4 legs', /^\/meetings\/[0-9a-f-]{36}$/i.test(meetingPath));
 
+    // ── A pastes the field for all four legs (M8: no free-text picking) ──
+    const horseOne = `Zed Runner ${stamp}a`;
+    await pasteFields(pageA, {
+      1: [[1, horseOne], [5, `Xray Five ${stamp}`]],
+      2: [[3, `Xavier Three ${stamp}`], [9, `Yankee Doodle ${stamp}`]],
+      3: [[5, `Zulu Five ${stamp}`], [6, `Whisky Six ${stamp}`]],
+      4: [[7, `Yellow Seven ${stamp}`], [8, `Yacht Eight ${stamp}`]],
+    });
+
     // ── B opens the same meeting directly ──
     await pageB.goto(`${base}${meetingPath}`, { waitUntil: 'networkidle0' });
 
@@ -122,9 +145,13 @@ async function main(): Promise<void> {
     });
 
     // ── R5.2: B adds a pick; A sees it appear without reloading ──
-    const horseOne = `Zed Runner ${stamp}a`;
+    // The runner NAME is on screen already (it is the field), so the arrival of
+    // B's PICK is B's initials chip showing up on that row.
     await addPick(pageB, 1, 1, horseOne);
-    await pageA.waitForFunction((n) => document.body.innerText.includes(n), { timeout: 20000 }, horseOne);
+    await pageA.waitForFunction(
+      () => (document.querySelector('button[aria-label^="Pick 1 "]') as HTMLElement | null)?.innerText.includes('BB') === true,
+      { timeout: 20000 },
+    );
     const loadedAfter = await pageA.evaluate(() => window.__e2eLoadedAt);
     check('B’s pick appears on A’s screen WITHOUT reload (realtime)', loadedAfter === loadedAt);
 
@@ -138,18 +165,19 @@ async function main(): Promise<void> {
 
     // Live counter shows A's five selections? A has 4 tips at this point.
     {
-      const counter = await pageA.evaluate(() => document.body.innerText.match(/Your tips:\s*(\d+)/)?.[1]);
-      check('live selection counter reflects A’s 4 tips while picking', counter === '4');
+      const counter = await pageA.evaluate(() => document.body.innerText.match(/(\d+) horses? picked/)?.[1]);
+      check('live selection counter reflects A’s 4 picks while picking', counter === '4', `counter read ${counter}`);
     }
 
     // ── R5.3: B cannot delete A's pick (no remove affordance on someone else's row) ──
     {
-      const bRemoveButtons = await pageB.$$eval('button[aria-label^="Remove your tip"]', (els) => els.length);
-      const aRemoveButtons = await pageA.$$eval('button[aria-label^="Remove your tip"]', (els) => els.length);
+      const bRemoveButtons = await pageB.$$eval('button[aria-label^="Remove "]', (els) => els.length);
+      const aRemoveButtons = await pageA.$$eval('button[aria-label^="Remove "]', (els) => els.length);
       // A owns exactly 4 picks ⇒ 4 remove buttons; B sees none of A's rows with X.
+      // B holds 3 picks of their own; none of them are A's.
       check(
-        'delete affordance exists only on own picks (A: 4, B: 0)',
-        bRemoveButtons === 0 && aRemoveButtons === 4,
+        'delete affordance exists only on own picks (A: 4, B: 3 of B’s own)',
+        aRemoveButtons === 4 && bRemoveButtons === 3,
         `A saw ${aRemoveButtons}, B saw ${bRemoveButtons}`,
       );
     }
@@ -159,8 +187,11 @@ async function main(): Promise<void> {
     await pageA.waitForFunction(() => document.body.innerText.includes('Picks are locked'), { timeout: 15000 });
     check('lock button works for A; banner shows', true);
     await pageB.waitForFunction(() => document.body.innerText.includes('Picks are locked'), { timeout: 20000 });
-    const bAddInputs = await pageB.$$eval('input[aria-label^="Runner number for leg"]', (els) => els.length);
-    check('pick inputs disappear for B after lock (disabled entry)', bAddInputs === 0);
+    const bControls = await pageB.$$eval(
+      'button[aria-label^="Pick "], button[aria-label^="Remove "], textarea[aria-label^="Paste the field"]',
+      (els) => els.length,
+    );
+    check('pick controls disappear for B after lock (disabled entry)', bControls === 0, `${bControls} controls left`);
 
     // ── R5.5: settle produces the hand-computed table ──
     await pageA.click('a::-p-text(Enter results)');

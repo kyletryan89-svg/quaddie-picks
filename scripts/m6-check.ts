@@ -16,6 +16,7 @@
 import puppeteer, { type Browser, type Page } from 'puppeteer';
 import { createClient } from '@supabase/supabase-js';
 import { scoreMeeting, type ScoringLeg, type ScoringPick } from '../lib/scoring';
+import { fieldFor, pasteField, pickRunners } from './test-field';
 import { loadEnvLocal } from './load-env';
 
 loadEnvLocal();
@@ -175,24 +176,37 @@ async function main(): Promise<void> {
     // ── Both slips go in, each written with that punter's OWN session ───────
     // (M5 already proved the tap-by-tap UI path; 28 picks are entered here
     // through each user's own JWT so RLS still gates every row.)
+    // M8: a pick points at a runner, so each leg needs its field first. The
+    // field is the union of everything either slip uses in that leg, plus the
+    // winner, pasted through the same RPC the UI's paste box calls.
+    const runnerIdByLeg = new Map<number, Map<number, string>>();
+    for (const legNumber of [1, 2, 3, 4]) {
+      const numbers = [
+        ...(TOMMO_SLIP[legNumber] ?? []),
+        ...(DAVO_SLIP[legNumber] ?? []),
+        DOC.winners[legNumber - 1]!.runner,
+      ];
+      runnerIdByLeg.set(
+        legNumber,
+        await pasteField({
+          url,
+          anonKey,
+          token: tokenT as string,
+          legId: legIdByNumber.get(legNumber) as string,
+          runners: fieldFor(numbers),
+        }),
+      );
+    }
+
     async function submitSlip(token: string, userId: string, slip: Record<number, number[]>): Promise<number> {
-      const rows: Array<Record<string, unknown>> = [];
+      const rows: Array<{ legId: string; runnerId: string }> = [];
       for (const [legNumber, runners] of Object.entries(slip)) {
+        const ids = runnerIdByLeg.get(Number(legNumber)) as Map<number, string>;
         for (const runner of runners) {
-          rows.push({ leg_id: legIdByNumber.get(Number(legNumber)), user_id: userId, runner_number: runner });
+          rows.push({ legId: legIdByNumber.get(Number(legNumber)) as string, runnerId: ids.get(runner) as string });
         }
       }
-      const res = await fetch(`${url}/rest/v1/picks`, {
-        method: 'POST',
-        headers: {
-          apikey: anonKey,
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          Prefer: 'return=representation',
-        },
-        body: JSON.stringify(rows),
-      });
-      return ((await res.json()) as unknown[]).length;
+      return pickRunners({ url, anonKey, token, userId, rows });
     }
 
     const tCount = await submitSlip(tokenT as string, tommoId, TOMMO_SLIP);
@@ -202,7 +216,7 @@ async function main(): Promise<void> {
 
     // ── Lock through the UI ─────────────────────────────────────────────────
     await pageT.goto(`${base}/meetings/${meetingId}`, { waitUntil: 'networkidle0' });
-    await pageT.waitForFunction(() => /Your tips:\s*24/.test(document.body.innerText), { timeout: 20000 });
+    await pageT.waitForFunction(() => /\b24 horses picked/.test(document.body.innerText), { timeout: 20000 });
     await pageT.click('button::-p-text(Lock picks)');
     await pageT.waitForFunction(() => document.body.innerText.includes('Picks are locked'), { timeout: 20000 });
     const { data: locked } = await admin.from('meetings').select('status').eq('id', meetingId).single();

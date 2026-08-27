@@ -152,14 +152,46 @@ async function main(): Promise<void> {
     const { data: legRows } = await admin.from('legs').select('id, leg_number').eq('meeting_id', meeting.id);
     const legIdByNumber = new Map((legRows ?? []).map((l) => [l.leg_number as number, l.id as string]));
 
+    // M8: a pick points at a runner, so each leg needs its field first. The
+    // field is every runner anyone tips in that leg, plus the winner.
+    const numbersByLeg = new Map<number, Set<number>>();
+    for (const l of spec.legs) {
+      const set = new Set<number>();
+      if (l.winnerNumber !== undefined) set.add(l.winnerNumber);
+      numbersByLeg.set(l.legNumber, set);
+    }
+    for (const byLeg of Object.values(spec.picks)) {
+      for (const [legNumber, runners] of Object.entries(byLeg)) {
+        const set = numbersByLeg.get(Number(legNumber));
+        if (set !== undefined) for (const n of runners) set.add(n);
+      }
+    }
+
+    const runnerRows = [...numbersByLeg.entries()].flatMap(([legNumber, numbers]) =>
+      [...numbers]
+        .sort((a, b) => a - b)
+        .map((n) => ({
+          leg_id: legIdByNumber.get(legNumber) as string,
+          runner_number: n,
+          runner_name: `Runner #${n}`,
+        })),
+    );
+    const { data: runnerData, error: runnerErr } = await admin.from('runners').insert(runnerRows).select('id, leg_id, runner_number');
+    if (runnerErr !== null) throw new Error(`runners insert failed (${spec.track}): ${runnerErr.message}`);
+    const runnerIdByLegAndNumber = new Map(
+      (runnerData ?? []).map((r) => [`${r.leg_id as string}:${r.runner_number as number}`, r.id as string]),
+    );
+
     const pickRows = Object.entries(spec.picks).flatMap(([userId, byLeg]) =>
       Object.entries(byLeg).flatMap(([legNumber, runners]) =>
-        runners.map((runnerNumber) => ({
-          leg_id: legIdByNumber.get(Number(legNumber)) as string,
-          user_id: userId,
-          runner_number: runnerNumber,
-          runner_name: `Runner #${runnerNumber}`,
-        })),
+        runners.map((runnerNumber) => {
+          const legId = legIdByNumber.get(Number(legNumber)) as string;
+          return {
+            leg_id: legId,
+            user_id: userId,
+            runner_id: runnerIdByLegAndNumber.get(`${legId}:${runnerNumber}`) as string,
+          };
+        }),
       ),
     );
     if (pickRows.length > 0) {

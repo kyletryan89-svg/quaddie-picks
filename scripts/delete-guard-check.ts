@@ -14,6 +14,7 @@
 
 import puppeteer, { type Browser, type Page } from 'puppeteer';
 import { createClient } from '@supabase/supabase-js';
+import { fieldFor, pasteField } from './test-field';
 import { loadEnvLocal } from './load-env';
 
 loadEnvLocal();
@@ -94,15 +95,20 @@ async function main(): Promise<void> {
     await pageA.waitForFunction(() => /^\/meetings\/[0-9a-f-]{36}$/.test(window.location.pathname), { timeout: 20000 });
     meetingId = (await pageA.evaluate(() => window.location.pathname)).split('/')[2] as string;
 
-    await pageA.waitForSelector('input[aria-label="Runner number for leg 1"]');
-    await pageA.type('input[aria-label="Runner number for leg 1"]', '9');
-    await pageA.type('input[aria-label="Runner name for leg 1"]', 'Guarded Gelding');
-    await pageA.click('form:has(input[aria-label="Runner number for leg 1"]) button[type="submit"]');
-    await pageA.waitForFunction(() => /Your tips:\s*1/.test(document.body.innerText), { timeout: 15000 });
+    // M8: leg 1 needs a field, then A taps runner #9 to select it.
+    const tokenA = (await sessionTokenOf(pageA)) as string;
+    const { data: legRows } = await admin.from('legs').select('id, leg_number').eq('meeting_id', meetingId).order('leg_number');
+    const leg1Id = (legRows as Array<{ id: string; leg_number: number }>).find((l) => l.leg_number === 1)!.id;
+    await pasteField({ url, anonKey, token: tokenA, legId: leg1Id, runners: [{ number: 9, name: 'Guarded Gelding' }, ...fieldFor([1, 2, 3])] });
+
+    await pageA.reload({ waitUntil: 'networkidle0' });
+    await pageA.waitForSelector('button[aria-label="Pick 9 Guarded Gelding"]');
+    await pageA.click('button[aria-label="Pick 9 Guarded Gelding"]');
+    await pageA.waitForFunction(() => /\b1 horse picked/.test(document.body.innerText), { timeout: 15000 });
 
     const { data: aProfile } = await admin.from('profiles').select('id').eq('display_name', nameA).single();
     const aUserId = (aProfile as { id: string }).id;
-    const { data: aPicks } = await admin.from('picks').select('id, runner_number').eq('user_id', aUserId);
+    const { data: aPicks } = await admin.from('picks').select('id, runner_id').eq('user_id', aUserId);
     const aPickId = ((aPicks ?? [])[0] as { id: string } | undefined)?.id ?? '';
     check("A's pick exists before the attack", aPickId !== '', `pick ${aPickId}`);
 
@@ -121,10 +127,17 @@ async function main(): Promise<void> {
     const aToken = await sessionTokenOf(pageA);
     check("A's session JWT recovered, so the read-back is genuinely user A", aToken !== null);
 
-    const asA = await fetch(`${url}/rest/v1/picks?id=eq.${aPickId}&select=id,runner_number,runner_name,user_id`, {
-      headers: { apikey: anonKey, Authorization: `Bearer ${aToken ?? ''}` },
-    });
-    const rowsAsA = (await asA.json()) as Array<{ id: string; runner_number: number; runner_name: string | null; user_id: string }>;
+    const asA = await fetch(
+      `${url}/rest/v1/picks?id=eq.${aPickId}&select=id,user_id,runners(runner_number,runner_name)`,
+      {
+        headers: { apikey: anonKey, Authorization: `Bearer ${aToken ?? ''}` },
+      },
+    );
+    const rowsAsA = (await asA.json()) as Array<{
+      id: string;
+      user_id: string;
+      runners: { runner_number: number; runner_name: string | null } | null;
+    }>;
     note(`A's read-back → HTTP ${asA.status} ${JSON.stringify(rowsAsA)}`);
 
     check(
@@ -134,7 +147,9 @@ async function main(): Promise<void> {
     );
     check(
       "the surviving row is intact: still A's, still runner #9",
-      rowsAsA[0]?.user_id === aUserId && rowsAsA[0]?.runner_number === 9 && rowsAsA[0]?.runner_name === 'Guarded Gelding',
+      rowsAsA[0]?.user_id === aUserId &&
+        rowsAsA[0]?.runners?.runner_number === 9 &&
+        rowsAsA[0]?.runners?.runner_name === 'Guarded Gelding',
       JSON.stringify(rowsAsA[0] ?? null),
     );
 
@@ -147,9 +162,9 @@ async function main(): Promise<void> {
       aText.includes('Guarded Gelding'),
     );
     check(
-      "A's outlay counter still counts the pick (1 tip / $1.00)",
-      /Your tips:\s*1/.test(aText) && /Outlay so far:\s*\$1\.00/.test(aText),
-      aText.split('\n').filter((l) => /Your tips|Outlay/.test(l)).join(' / '),
+      "A's picked count still counts the pick (1 horse picked)",
+      /\b1 horse picked/.test(aText),
+      aText.split('\n').filter((l) => /picked/.test(l)).join(' / '),
     );
 
     // And B — the attacker — can still see it too.
