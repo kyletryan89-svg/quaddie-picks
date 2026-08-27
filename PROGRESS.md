@@ -50,3 +50,35 @@ Toolchain fixes made during M0 (recorded for reproducibility):
 - 2026-08-26 — Environment surveyed; PLAN.md written; Q1 (database target) asked and answered: new hosted project `quaddie-picks` (Sydney).
 - 2026-08-26 — Platform note: the session's permission classifier had an extended outage (~30 min). Used the window to stage the full codebase (schema migration, scoring module + tests, security/E2E/smoke scripts, all screens) so milestones could execute immediately once shell access returned. No rubric item has been marked based on unexecuted work.
 - 2026-08-26 — M0 verified end-to-end via executed commands only: typecheck/lint/test all exit 0; purity + no-secret claims backed by greps shown above.
+
+---
+
+## M4 — Meetings list, create meeting, legs (R1, R6)
+
+Verified 2026-08-28 against the live hosted DB via `npm run test:m4` (new script, `scripts/m4-check.ts`) driving Puppeteer at a 390×844 viewport, plus a service-role read of what actually landed in Postgres. **25/25 checks green.**
+
+| Ms | Rubric | Item | Result | Evidence |
+|----|--------|------|--------|----------|
+| M4 | R1 | `npm run build` succeeds with zero errors | ✅ PASS | *(was ⏸ DEFERRED at M0 — env now exists, so it was run)* `npm run build` exit 0, Next 16.3.3 Turbopack, 7 routes compiled, TypeScript step clean |
+| M4 | R1 | `tsc --noEmit` clean, `strict: true` | ✅ PASS | `npm run typecheck` exit 0; `tsconfig.json:11 "strict": true` |
+| M4 | R1 | `npm run lint` clean | ✅ PASS | `eslint .` exit 0 — 0 errors (1 pre-existing warning in `MeetingScreen.tsx:117`, an M5 file; fixed in M5) |
+| M4 | R1 | No `any` in `lib/`, no `@ts-ignore` anywhere | ✅ PASS | grep `: any\|as any\|<any>\|any[]` in `lib/` → 0; grep `@ts-ignore\|@ts-expect-error\|@ts-nocheck` in app/lib/components/scripts/tests → 0 |
+| M4 | R1 | No secrets in client components; `GROUP_PASSCODE` server-only | ✅ PASS | `GROUP_PASSCODE` appears only in `app/actions/auth.ts` (`'use server'`) + Node scripts. All 5 `'use client'` files contain zero `process.env` references; `SERVICE_ROLE` → 0 matches in app/components/lib |
+| M4 | R6 | Meetings list usable at 390px, no horizontal scroll | ✅ PASS | `scrollWidth=390` in all three states: empty, populated, and post-create |
+| M4 | R6 | `/meetings/new` usable at 390px, no horizontal scroll | ✅ PASS | `scrollWidth=390` |
+| M4 | R6 | Loading state exists for the meetings list | ✅ PASS | Skeleton caught **on screen** mid-query (`[aria-label="Loading"]` present), then asserted to clear once data arrived — not inferred from source |
+| M4 | R6 | Empty state exists for the meetings list | ✅ PASS | Empty branch is unreachable while the season holds fixtures, so all 8 in-season meetings were parked at `2001-01-01`, `/` loaded for real → *"No meetings in the 2026–27 season yet. Saturday arvo? Tap New meeting."*; dates restored in a `finally` (`[restore] 8/8`) |
+| M4 | R6 | Errors surface as visible messages, never silent console logs | ✅ PASS | 1-char track (passes HTML `required`, fails the server rule) → visible `[role="alert"]` reading "Track name must be 2–60 characters."; stays on `/meetings/new` |
+| M4 | — | Create writes 1 meeting + exactly 4 legs | ✅ PASS | Service-role read: 1 meeting row, `status='open'`, `created_by` = creating user; 4 legs with `leg_number` 1,2,3,4 and `race_number` 3,5,7,9 exactly as typed; `winner_number`/`winner_sp` null |
+| M4 | — | New meeting appears on the list with track, date, badge, pick count | ✅ PASS | Track string present, `OPEN` badge, "No picks yet", date rendered AU-style ("Wed, 26 Aug 2026") not raw ISO |
+
+### Bugs found by executing M4 (both fixed)
+
+1. **`created_by` was never written.** `createMeeting` inserted `{ track, meeting_date }` only, leaving the spec §5 `created_by` column null on every meeting. Fixed: `app/actions/meetings.ts` now inserts `created_by: auth.userId`. Verified by service-role read of the created row.
+2. **A rejected create wiped the whole form.** React 19 resets an uncontrolled form once its action resolves, so hitting a validation error cleared the track, the date, and all four race numbers — the user had to retype everything. Confirmed by probe (`track:"A" races:["3","5","7","9"]` → `track:"" races:["","","",""]`). Fixed: `CreateMeetingState` now echoes the submitted `values` back and `NewMeetingForm` re-seeds its `defaultValue`s from them (keyed so React remounts with the new defaults). Regression check added: *"a rejected submit keeps what the user typed"*.
+
+Also note: this bug is why the first run of the M4 script reported "create did not redirect" — the reset had emptied the race inputs, so HTML `required` silently blocked the second submit and no POST ever left the browser.
+
+### Deferred out of M4
+
+- ⏸ **Tap targets ≥44px** (SPEC §6 prose; not an R1/R6 rubric checkbox). Measured on both M4 screens: smallest interactive element is the header brand link `QuaddiePicks` at **24px**. Header is shared chrome — deferred to **M8** (the mobile pass), recorded here as a `[NOTE]` in the M4 script output rather than silently passed.

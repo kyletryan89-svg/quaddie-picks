@@ -15,7 +15,8 @@
     "test:mobile": "tsx scripts/mobile-check.ts",
     "seed": "tsx scripts/seed.ts",
     "smoke": "tsx scripts/smoke-test.ts",
-    "e2e": "tsx scripts/e2e-test.ts"
+    "e2e": "tsx scripts/e2e-test.ts",
+    "test:m4": "tsx scripts/m4-check.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

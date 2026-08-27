@@ -10,6 +10,16 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 
 export interface CreateMeetingState {
   error?: string;
+  /**
+   * What the user typed, echoed back. React 19 resets an uncontrolled form once
+   * its action resolves, so without this a validation error wipes the track and
+   * all four race numbers and the user has to start again.
+   */
+  values?: {
+    track: string;
+    date: string;
+    races: [string, string, string, string];
+  };
 }
 
 export async function createMeeting(_prev: CreateMeetingState, formData: FormData): Promise<CreateMeetingState> {
@@ -19,18 +29,23 @@ export async function createMeeting(_prev: CreateMeetingState, formData: FormDat
   const track = String(formData.get('track') ?? '').trim();
   const date = String(formData.get('date') ?? '').trim();
   const raceNumbers = [1, 2, 3, 4].map((i) => String(formData.get(`race${i}`) ?? '').trim());
+  const values: CreateMeetingState['values'] = {
+    track,
+    date,
+    races: raceNumbers as [string, string, string, string],
+  };
 
   if (track.length < 2 || track.length > 60) {
-    return { error: 'Track name must be 2–60 characters.' };
+    return { error: 'Track name must be 2–60 characters.', values };
   }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return { error: 'Pick a valid meeting date.' };
+    return { error: 'Pick a valid meeting date.', values };
   }
   const races: number[] = [];
   for (const raw of raceNumbers) {
     const n = Number(raw);
     if (!Number.isInteger(n) || n < 1 || n > 12) {
-      return { error: 'Race numbers must be whole numbers between 1 and 12.' };
+      return { error: 'Race numbers must be whole numbers between 1 and 12.', values };
     }
     races.push(n);
   }
@@ -38,18 +53,18 @@ export async function createMeeting(_prev: CreateMeetingState, formData: FormDat
   const supabase = await createSupabaseServerClient();
   const { data: meeting, error: meetingError } = await supabase
     .from('meetings')
-    .insert({ track, meeting_date: date })
+    .insert({ track, meeting_date: date, created_by: auth.userId })
     .select('id')
     .single();
   if (meetingError !== null || meeting === null) {
-    return { error: 'Could not create the meeting — try again.' };
+    return { error: 'Could not create the meeting — try again.', values };
   }
 
   const { error: legsError } = await supabase
     .from('legs')
     .insert(races.map((raceNumber, i) => ({ meeting_id: meeting.id, leg_number: i + 1, race_number: raceNumber })));
   if (legsError !== null) {
-    return { error: `Meeting created but legs failed (${legsError.message}). Delete it and try again.` };
+    return { error: `Meeting created but legs failed (${legsError.message}). Delete it and try again.`, values };
   }
 
   revalidatePath('/');
