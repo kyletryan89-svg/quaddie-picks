@@ -12,6 +12,7 @@
     "verify": "npm run typecheck && npm run lint && npm run test",
     "test:security": "tsx scripts/security-tests.ts",
     "test:auth": "tsx scripts/auth-test.ts",
+    "test:mobile": "tsx scripts/mobile-check.ts",
     "seed": "tsx scripts/seed.ts",
     "smoke": "tsx scripts/smoke-test.ts",
     "e2e": "tsx scripts/e2e-test.ts"

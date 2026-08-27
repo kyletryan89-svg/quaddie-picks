@@ -5,7 +5,7 @@
 // cost of boxing wide is visible WHILE picking.
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { lockMeeting } from '@/app/actions/meetings';
 import { ErrorNote } from '@/components/ErrorNote';
@@ -36,6 +36,12 @@ interface RealtimePickEvent {
   errors: string[];
 }
 
+interface RealtimeStatusEvent {
+  eventType: 'INSERT' | 'UPDATE' | 'DELETE';
+  new: Partial<Meeting>;
+  old: Partial<Meeting>;
+}
+
 export function MeetingScreen({ meeting, legs, initialPicks, initialNames, currentUserId }: Props) {
   const [picks, setPicks] = useState<Pick[]>(initialPicks);
   const [names, setNames] = useState<Record<string, string>>(initialNames);
@@ -43,35 +49,70 @@ export function MeetingScreen({ meeting, legs, initialPicks, initialNames, curre
   const [legErrors, setLegErrors] = useState<Record<number, string>>({});
   const [lockError, setLockError] = useState<string | undefined>(undefined);
   const [locking, setLocking] = useState(false);
+  // Status is state so a lock/settle made by ANOTHER member lands here live.
+  const [status, setStatus] = useState(meeting.status);
+  // The realtime handler closes over this component once; mirror status into a
+  // ref so it compares against the CURRENT value, not the subscribe-time one.
+  const statusRef = useRef(status);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
   const router = useRouter();
 
-  const isOpen = meeting.status === 'open';
+  const isOpen = status === 'open';
 
   // ── Realtime on picks (the whole point — SPEC §6) ──────────────────────────
   useEffect(() => {
+    let cancelled = false;
+    let channel: ReturnType<typeof getSupabaseBrowserClient>['channel'] | undefined;
     const supabase = getSupabaseBrowserClient();
-    const legIds = legs.map((l) => l.id).join(',');
-    const channel = supabase
-      .channel(`picks:${meeting.id}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'picks', filter: `leg_id=in.(${legIds})` },
-        (payload: RealtimePickEvent) => {
-          if (payload.eventType === 'INSERT') {
-            const row = payload.new as Pick;
-            setPicks((prev) => (prev.some((p) => p.id === row.id) ? prev : [...prev, row]));
-          } else if (payload.eventType === 'DELETE') {
-            const gone = payload.old as Pick;
-            setPicks((prev) => prev.filter((p) => p.id !== gone.id));
-          }
-        },
-      )
-      .subscribe((status: string) => {
-        setLive(status === 'SUBSCRIBED');
-      });
+
+    void (async () => {
+      // Restore the session FIRST and hand its JWT to the realtime socket.
+      // Subscribing before the token lands means the channel joins with anon
+      // claims and RLS silently suppresses every postgres_changes event.
+      const { data } = await supabase.auth.getSession();
+      if (cancelled) return;
+      if (data.session !== null) supabase.realtime.setAuth(data.session.access_token);
+
+      const legIds = legs.map((l) => l.id).join(',');
+      channel = supabase
+        .channel(`picks:${meeting.id}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'picks', filter: `leg_id=in.(${legIds})` },
+          (payload: RealtimePickEvent) => {
+            if (payload.eventType === 'INSERT') {
+              const row = payload.new as Pick;
+              setPicks((prev) => (prev.some((p) => p.id === row.id) ? prev : [...prev, row]));
+            } else if (payload.eventType === 'DELETE') {
+              const gone = payload.old as Pick;
+              setPicks((prev) => prev.filter((p) => p.id !== gone.id));
+            }
+          },
+        )
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'meetings', filter: `id=in.(${meeting.id})` },
+          // Another member locked or settled the meeting — flip this screen
+          // without a reload; settling also pulls winners + results from the
+          // server via router.refresh().
+          (payload: RealtimeStatusEvent) => {
+            const next = payload.new as Partial<Meeting>;
+            if (next.status !== undefined && next.status !== null && next.status !== statusRef.current) {
+              setStatus(next.status);
+              if (next.status === 'settled') void router.refresh();
+            }
+          },
+        )
+        .subscribe((subStatus: string) => {
+          setLive(subStatus === 'SUBSCRIBED');
+        });
+    })();
 
     return () => {
-      void supabase.removeChannel(channel);
+      cancelled = true;
+      if (channel !== undefined) void supabase.removeChannel(channel);
     };
   }, [meeting.id, legs]);
 

@@ -101,10 +101,14 @@ async function main(): Promise<void> {
     await pageA.type('input[name="race2"]', '2');
     await pageA.type('input[name="race3"]', '3');
     await pageA.type('input[name="race4"]', '4');
-    await Promise.all([
-      pageA.waitForFunction(() => window.location.pathname.startsWith('/meetings/'), { timeout: 15000 }),
-      pageA.click('button::-p-text(Create meeting)'),
-    ]);
+    // NB: don't use "startsWith('/meetings/')" as the wait predicate — we are
+    // ON /meetings/new, which already matches. Wait for the created-meeting
+    // path shape (/meetings/<uuid>) instead.
+    await pageA.click('button::-p-text(Create meeting)');
+    await pageA.waitForFunction(
+      () => /^\/meetings\/[0-9a-f-]{36}$/.test(window.location.pathname),
+      { timeout: 15000 },
+    );
     const meetingPath = new URL(pageA.url()).pathname; // /meetings/<id>
     check('A creates a meeting with 4 legs', /^\/meetings\/[0-9a-f-]{36}$/i.test(meetingPath));
 
