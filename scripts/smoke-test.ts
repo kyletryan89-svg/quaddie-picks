@@ -42,7 +42,7 @@ async function main(): Promise<void> {
   }
 
   // 2. Same for /meetings/[id] and /leaderboard
-  for (const path of [`/meetings/${fakeMeetingId}`, '/leaderboard', '/meetings/new']) {
+  for (const path of [`/meetings/${fakeMeetingId}`, '/leaderboard']) {
     const res = await get(path);
     const loc = res.headers.get('location') ?? '';
     const ok = res.status >= 300 && res.status < 400 && loc.includes('/login');

@@ -1,13 +1,27 @@
 # Quaddie Picks Tracker
 
-Private app for a small NSW crew who play the quaddie: create a meeting, everyone's
-picks appear live as they're entered, picks lock before the jump, someone types in the
-four winners + starting prices, and the app scores every member leg by leg and keeps
-the season leaderboard. Scoring is individual legs only — **no tickets, no dividends,
-no payouts**; the real bet is settled privately between members.
+Private app for a small NSW crew who play the quaddie. Each Saturday the app pulls the
+metropolitan meetings straight from the Racing NSW form guide; you pick a meeting, see
+the quaddie (always the last four races), tap your runners, and watch everyone else's
+picks appear live. Picks lock before the jump, someone types in the four winners +
+starting prices, and the app scores every member leg by leg and keeps the season
+leaderboard. A comment box sits under the card. Scoring is individual legs only —
+**no tickets, no dividends, no payouts**; the real bet is settled privately between members.
 
 Stack: Next.js (App Router) · TypeScript strict · Tailwind · Supabase (Postgres + Auth +
 Realtime, RLS on) · Vitest · Vercel (`syd1`).
+
+## How it works
+
+- **Meetings** come from the [Racing NSW FreeFields](https://racing.racingnsw.com.au/FreeFields/)
+  calendar feed — no manual entry. The app mirrors the upcoming Saturday metro cards
+  (Randwick, Rosehill, Warwick Farm, Canterbury, Kensington) into Postgres on demand.
+- **The quaddie is the last four races** of the card, runners and all, shown with their
+  form guide detail (jockey, weight, barrier, form). Scratchings are marked.
+- **Picks** are taps on a runner; they sync live via Supabase Realtime. **Comments**
+  live on the same screen.
+- **Settle + leaderboard** are unchanged: type the four winners + SPs, and the season
+  ladder aggregates everything.
 
 ## Environment variables
 
@@ -44,9 +58,9 @@ Copy `.env.example` → `.env.local` and fill these in before anything else.
    vercel deploy             # or: git push if connected to a repo
    ```
    `vercel.json` pins serverless functions to `syd1` so latency stays local.
-6. **Seed demo data (optional)**
+6. **Seed the roster (optional)**
    ```bash
-   npm run seed              # 5 members, 2 settled meetings, 1 open meeting
+   npm run seed              # creates the 5 member profiles (no meetings)
    ```
 
 ## Scripts
@@ -57,7 +71,9 @@ Copy `.env.example` → `.env.local` and fill these in before anything else.
 | `npm run build` | Production build |
 | `npm run verify` | typecheck + lint + unit tests (the pre-commit gate) |
 | `npm run test:security` | RLS integration tests against the live database |
-| `npm run seed` | Seed/reseed demo data |
+| `npm run test:auth` | Login flow tests against a running server |
+| `npm run test:e2e` | Feed-driven flow (list → quaddie → picks → comments) against a running server |
+| `npm run seed` | Create the 5 member profiles |
 | `npm run smoke` | Smoke-test a deployed URL (pass `BASE_URL=https://…`) |
 
 ## Scoring in one paragraph
@@ -71,5 +87,6 @@ tables: [`docs/scoring-examples.md`](docs/scoring-examples.md).
 
 ## Season
 
-The Australian racing season runs 1 Aug – 31 Jul. The meetings list and leaderboard
-filter on the current season by default.
+The Australian racing season runs 1 Aug – 31 Jul. The leaderboard filters on the
+current season by default. The meetings list shows the upcoming Saturday metro cards
+regardless of season.

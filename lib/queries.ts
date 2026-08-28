@@ -4,7 +4,7 @@
 
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import type { Season } from '@/lib/season';
-import type { Leg, Meeting, Pick, Profile, Runner } from '@/lib/types';
+import type { Comment, Leg, Meeting, Pick, Profile, Runner } from '@/lib/types';
 
 export interface MeetingSummary {
   meeting: Meeting;
@@ -111,6 +111,60 @@ export async function getProfiles(): Promise<Profile[]> {
   const supabase = await createSupabaseServerClient();
   const { data } = await supabase.from('profiles').select('*').order('display_name');
   return (data ?? []) as Profile[];
+}
+
+/** Comments for a meeting, oldest first. */
+export async function getComments(meetingId: string): Promise<Comment[]> {
+  const supabase = await createSupabaseServerClient();
+  const { data } = await supabase.from('comments').select('*').eq('meeting_id', meetingId).order('created_at');
+  return (data ?? []) as Comment[];
+}
+
+export interface PickCount {
+  pickCount: number;
+  memberCount: number;
+}
+
+/** Per-meeting pick/member counts for a batch of meeting ids (the list page). */
+export async function getPickCountsByMeeting(meetingIds: readonly string[]): Promise<Map<string, PickCount>> {
+  const out = new Map<string, PickCount>();
+  if (meetingIds.length === 0) return out;
+
+  const supabase = await createSupabaseServerClient();
+  const { data: legs } = await supabase.from('legs').select('id, meeting_id').in('meeting_id', meetingIds);
+  const meetingIdByLeg = new Map<string, string>();
+  for (const l of (legs ?? []) as Array<{ id: string; meeting_id: string }>) {
+    meetingIdByLeg.set(l.id, l.meeting_id);
+  }
+  const legIds = [...meetingIdByLeg.keys()];
+  if (legIds.length === 0) return out;
+
+  const { data: picks } = await supabase.from('picks').select('leg_id, user_id').in('leg_id', legIds);
+  for (const p of (picks ?? []) as Array<{ leg_id: string; user_id: string }>) {
+    const meetingId = meetingIdByLeg.get(p.leg_id);
+    if (meetingId === undefined) continue;
+    const cur = out.get(meetingId) ?? { pickCount: 0, memberCount: 0 };
+    cur.pickCount += 1;
+    out.set(meetingId, cur);
+  }
+  // Members who have picked, per meeting.
+  const membersByMeeting = new Map<string, Set<string>>();
+  for (const p of (picks ?? []) as Array<{ leg_id: string; user_id: string }>) {
+    const meetingId = meetingIdByLeg.get(p.leg_id);
+    if (meetingId === undefined) continue;
+    let set = membersByMeeting.get(meetingId);
+    if (set === undefined) {
+      set = new Set();
+      membersByMeeting.set(meetingId, set);
+    }
+    set.add(p.user_id);
+  }
+  for (const [meetingId, set] of membersByMeeting) {
+    const cur = out.get(meetingId) ?? { pickCount: 0, memberCount: 0 };
+    cur.memberCount = set.size;
+    out.set(meetingId, cur);
+  }
+  return out;
 }
 
 /** Every SETTLED meeting inside the season, bundled for lib/leaderboard.ts. */

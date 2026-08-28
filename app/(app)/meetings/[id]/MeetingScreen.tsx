@@ -1,39 +1,34 @@
 'use client';
 
-// The core screen (SPEC §6, rebuilt in M8): track, date, status, and the four
-// quaddie legs. Nothing else while picking.
-//
-// A leg is its real field — the runners someone pasted in — as a tappable list.
-// Each row is runner number, runner name, and the initials of every member who
-// has taken it. You select by tapping; there is no free-text runner entry
-// anywhere, and no money on this screen: the header is a plain count of horses,
-// not an outlay.
+// The core screen: track, date, status, and the four quaddie legs. Each leg is
+// the real field from the Racing NSW form guide — a tappable list of runners
+// with jockey, weight, barrier and form — plus the initials of every member who
+// has taken each one. A comment box sits at the bottom. Nothing else.
 
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { lockMeeting } from '@/app/actions/meetings';
+import { Comments } from '@/components/Comments';
 import { ErrorNote } from '@/components/ErrorNote';
 import { StatusBadge } from '@/components/StatusBadge';
 import { ResultsTable } from '@/components/ResultsTable';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
-import { parseField, type ParsedRunner } from '@/lib/field-parse';
 import { formatDate, initialsOf, money } from '@/lib/format';
 import { toScoringLegs, toScoringPicks } from '@/lib/meeting-score';
 import { scoreMeeting, type UserResult } from '@/lib/scoring';
-import type { Leg, Meeting, Pick, Runner } from '@/lib/types';
+import type { Comment, Leg, Meeting, Pick, Runner } from '@/lib/types';
 
 interface Props {
   meeting: Meeting;
   legs: Leg[];
   initialRunners: Runner[];
   initialPicks: Pick[];
+  initialComments: Comment[];
   initialNames: Record<string, string>;
   currentUserId: string;
 }
 
-// Shape of the postgres_changes payload we actually consume. Kept local because
-// supabase-js does not re-export RealtimePostgresChangesPayload at top level.
 interface RealtimePickEvent {
   eventType: 'INSERT' | 'UPDATE' | 'DELETE';
   new: Partial<Pick>;
@@ -46,7 +41,15 @@ interface RealtimeStatusEvent {
   old: Partial<Meeting>;
 }
 
-export function MeetingScreen({ meeting, legs, initialRunners, initialPicks, initialNames, currentUserId }: Props) {
+export function MeetingScreen({
+  meeting,
+  legs,
+  initialRunners,
+  initialPicks,
+  initialComments,
+  initialNames,
+  currentUserId,
+}: Props) {
   const [runners, setRunners] = useState<Runner[]>(initialRunners);
   const [picks, setPicks] = useState<Pick[]>(initialPicks);
   const [names, setNames] = useState<Record<string, string>>(initialNames);
@@ -56,16 +59,13 @@ export function MeetingScreen({ meeting, legs, initialRunners, initialPicks, ini
   const [locking, setLocking] = useState(false);
   const [status, setStatus] = useState(meeting.status);
 
-  // The realtime handler closes over this component once; mirror status into a
-  // ref so it compares against the CURRENT value, not the subscribe-time one.
   const statusRef = useRef(status);
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
 
   // Adopt a status the SERVER reports (after router.refresh() following a lock
-  // or settle), using React's adjust-state-during-render pattern — the effect
-  // form trips react-hooks/set-state-in-effect.
+  // or settle), using React's adjust-state-during-render pattern.
   const [lastServerStatus, setLastServerStatus] = useState(meeting.status);
   if (meeting.status !== lastServerStatus) {
     setLastServerStatus(meeting.status);
@@ -75,8 +75,6 @@ export function MeetingScreen({ meeting, legs, initialRunners, initialPicks, ini
   const router = useRouter();
   const isOpen = status === 'open';
 
-  // Known runner ids, for spotting a pick that arrives for a field this screen
-  // has not seen yet (someone else pasted it after we loaded).
   const runnerIdsRef = useRef(new Set(initialRunners.map((r) => r.id)));
   useEffect(() => {
     runnerIdsRef.current = new Set(runners.map((r) => r.id));
@@ -84,7 +82,7 @@ export function MeetingScreen({ meeting, legs, initialRunners, initialPicks, ini
 
   const legIdsKey = legs.map((l) => l.id).join(',');
 
-  // ── Realtime on picks (the whole point — SPEC §6) ──────────────────────────
+  // ── Realtime on picks (the whole point) ────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     let channel: ReturnType<typeof getSupabaseBrowserClient>['channel'] | undefined;
@@ -97,9 +95,6 @@ export function MeetingScreen({ meeting, legs, initialRunners, initialPicks, ini
     }
 
     void (async () => {
-      // Restore the session FIRST and hand its JWT to the realtime socket.
-      // Subscribing before the token lands means the channel joins with anon
-      // claims and RLS silently suppresses every postgres_changes event.
       const { data } = await supabase.auth.getSession();
       if (cancelled) return;
       if (data.session !== null) supabase.realtime.setAuth(data.session.access_token);
@@ -112,8 +107,6 @@ export function MeetingScreen({ meeting, legs, initialRunners, initialPicks, ini
           (payload: RealtimePickEvent) => {
             if (payload.eventType === 'INSERT') {
               const row = payload.new as Pick;
-              // A pick for a runner we have never seen means the field changed
-              // under us; pull it before rendering the pick.
               if (!runnerIdsRef.current.has(row.runner_id)) void refreshRunners();
               setPicks((prev) => (prev.some((p) => p.id === row.id) ? prev : [...prev, row]));
             } else if (payload.eventType === 'DELETE') {
@@ -125,7 +118,6 @@ export function MeetingScreen({ meeting, legs, initialRunners, initialPicks, ini
         .on(
           'postgres_changes',
           { event: 'UPDATE', schema: 'public', table: 'meetings', filter: `id=in.(${meeting.id})` },
-          // Another member locked or settled — flip this screen without a reload.
           (payload: RealtimeStatusEvent) => {
             const next = payload.new as Partial<Meeting>;
             if (next.status !== undefined && next.status !== null && next.status !== statusRef.current) {
@@ -171,7 +163,9 @@ export function MeetingScreen({ meeting, legs, initialRunners, initialPicks, ini
     const byLeg = new Map<string, Runner[]>();
     for (const leg of legs) byLeg.set(leg.id, []);
     for (const r of runners) byLeg.get(r.leg_id)?.push(r);
-    for (const list of byLeg.values()) list.sort((a, b) => a.runner_number - b.runner_number);
+    for (const list of byLeg.values()) {
+      list.sort((a, b) => Number(a.scratched) - Number(b.scratched) || a.runner_number - b.runner_number);
+    }
     return byLeg;
   }, [runners, legs]);
 
@@ -219,6 +213,12 @@ export function MeetingScreen({ meeting, legs, initialRunners, initialPicks, ini
       return;
     }
 
+    // A scratched runner can still lose an existing tip, but never gain one.
+    if (runner.scratched) {
+      setLegError(leg.leg_number, `${runner.runner_name ?? `Runner #${runner.runner_number}`} is scratched.`);
+      return;
+    }
+
     const { data, error } = await supabase
       .from('picks')
       .insert({ leg_id: leg.id, user_id: currentUserId, runner_id: runner.id })
@@ -232,26 +232,6 @@ export function MeetingScreen({ meeting, legs, initialRunners, initialPicks, ini
       const row = data as Pick;
       setPicks((prev) => (prev.some((p) => p.id === row.id) ? prev : [...prev, row]));
     }
-  }
-
-  /** Replace a leg's field with a freshly pasted one. */
-  async function saveField(leg: Leg, parsed: ParsedRunner[]): Promise<boolean> {
-    setLegError(leg.leg_number, '');
-    const supabase = getSupabaseBrowserClient();
-    const { data, error } = await supabase.rpc('replace_leg_field', {
-      p_leg_id: leg.id,
-      p_runners: parsed.map((r) => ({ number: r.number, name: r.name })),
-    });
-    if (error !== null) {
-      setLegError(leg.leg_number, error.message);
-      return false;
-    }
-    const fresh = (data ?? []) as Runner[];
-    setRunners((prev) => [...prev.filter((r) => r.leg_id !== leg.id), ...fresh]);
-    // Re-pasting can cascade away picks on runners that left the field.
-    const keptIds = new Set(fresh.map((r) => r.id));
-    setPicks((prev) => prev.filter((p) => p.leg_id !== leg.id || keptIds.has(p.runner_id)));
-    return true;
   }
 
   async function lock(): Promise<void> {
@@ -330,11 +310,12 @@ export function MeetingScreen({ meeting, legs, initialRunners, initialPicks, ini
             myCount={myCountByLeg.get(leg.id) ?? 0}
             error={legErrors[leg.leg_number]}
             onToggle={(runner) => void toggleRunner(leg, runner)}
-            onSaveField={(parsed) => saveField(leg, parsed)}
           />
         ))}
 
       {status === 'settled' && <ResultsTable results={results} names={names} />}
+
+      <Comments meetingId={meeting.id} currentUserId={currentUserId} initialComments={initialComments} names={names} />
     </div>
   );
 }
@@ -349,7 +330,6 @@ function LegSection({
   myCount,
   error,
   onToggle,
-  onSaveField,
 }: {
   leg: Leg;
   runners: Runner[];
@@ -360,30 +340,40 @@ function LegSection({
   myCount: number;
   error?: string;
   onToggle: (runner: Runner) => void;
-  onSaveField: (parsed: ParsedRunner[]) => Promise<boolean>;
 }) {
   const winnerShown = leg.winner_number !== null && leg.winner_sp !== null;
-  const hasField = runners.length > 0;
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
-      <header className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
-        <h2 className="text-sm font-bold">
-          Leg {leg.leg_number}
-          {leg.race_number !== null && <span className="ml-1 font-normal text-slate-500">· R{leg.race_number}</span>}
-        </h2>
+      <header className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-2">
+        <div className="min-w-0">
+          <h2 className="text-sm font-bold">
+            Leg {leg.leg_number}
+            {leg.race_number !== null && <span className="ml-1 font-normal text-slate-500">· R{leg.race_number}</span>}
+          </h2>
+          {leg.race_name !== null && (
+            <p className="truncate text-xs text-slate-500">
+              {leg.race_name}
+              {leg.race_time !== null && <span className="text-slate-400"> · {leg.race_time}</span>}
+            </p>
+          )}
+        </div>
         {winnerShown ? (
-          <span className="text-xs font-medium text-emerald-700">
+          <span className="shrink-0 text-xs font-medium text-emerald-700">
             🏆 #{leg.winner_number} {leg.winner_name ?? ''} @ ${money(Number(leg.winner_sp ?? 0))}
           </span>
         ) : (
-          <span className="text-xs text-slate-500" data-testid={`leg-count-${leg.leg_number}`}>
+          <span className="shrink-0 text-xs text-slate-500" data-testid={`leg-count-${leg.leg_number}`}>
             {myCount} picked
           </span>
         )}
       </header>
 
-      {hasField ? (
+      {runners.length === 0 ? (
+        <p className="px-3 py-3 text-sm text-slate-400">
+          {isOpen ? 'Field not published yet — check back closer to race day.' : 'No field for this leg.'}
+        </p>
+      ) : (
         <ul className="divide-y divide-slate-50">
           {runners.map((runner) => {
             const on = picksByRunner.get(runner.id) ?? [];
@@ -391,6 +381,14 @@ function LegSection({
             const isWinner = leg.winner_number === runner.runner_number;
             const label = `${runner.runner_number} ${runner.runner_name ?? ''}`.trim();
             const takers = on.map((p) => names[p.user_id] ?? '?');
+
+            const formBits = [
+              runner.jockey ?? '',
+              runner.weight !== null ? `${runner.weight}kg` : '',
+              runner.barrier !== null ? `B${runner.barrier}` : '',
+              runner.form ?? '',
+            ].filter((s) => s !== '');
+            const formLine = formBits.join(' · ');
 
             const body = (
               <>
@@ -401,9 +399,17 @@ function LegSection({
                 >
                   {runner.runner_number}
                 </span>
-                <span className={`min-w-0 flex-1 truncate text-left text-sm ${mine ? 'font-semibold' : ''}`}>
-                  {runner.runner_name ?? `Runner #${runner.runner_number}`}
-                  {isWinner && <span className="ml-1">🏆</span>}
+                <span className="min-w-0 flex-1">
+                  <span className={`flex items-center gap-1.5 text-left text-sm ${mine ? 'font-semibold' : ''}`}>
+                    <span className={`truncate ${runner.scratched ? 'text-slate-400 line-through' : ''}`}>
+                      {runner.runner_name ?? `Runner #${runner.runner_number}`}
+                    </span>
+                    {runner.scratched && (
+                      <span className="shrink-0 rounded bg-red-100 px-1 text-[10px] font-bold uppercase text-red-700">SCR</span>
+                    )}
+                    {isWinner && <span className="shrink-0">🏆</span>}
+                  </span>
+                  {formLine !== '' && <span className="block truncate text-left text-xs text-slate-400">{formLine}</span>}
                 </span>
                 <span className="flex shrink-0 items-center gap-1">
                   {on.map((p) => {
@@ -425,9 +431,13 @@ function LegSection({
               </>
             );
 
+            // Scratched runners can't be picked, but a scratched runner someone
+            // already holds must stay tappable so they can remove it.
+            const tappable = isOpen && (!runner.scratched || mine);
+
             return (
               <li key={runner.id}>
-                {isOpen ? (
+                {tappable ? (
                   <button
                     type="button"
                     onClick={() => onToggle(runner)}
@@ -451,12 +461,7 @@ function LegSection({
             );
           })}
         </ul>
-      ) : (
-        !isOpen && <p className="px-3 py-3 text-sm text-slate-400">No field was pasted for this leg.</p>
       )}
-
-      {/* A leg with no field shows the paste box and nothing else. */}
-      {isOpen && <PasteField leg={leg} hasField={hasField} onSave={onSaveField} />}
 
       {error !== undefined && error !== '' && (
         <p role="alert" className="border-t border-slate-100 px-3 py-2 text-xs text-red-600">
@@ -464,118 +469,5 @@ function LegSection({
         </p>
       )}
     </section>
-  );
-}
-
-function PasteField({
-  leg,
-  hasField,
-  onSave,
-}: {
-  leg: Leg;
-  hasField: boolean;
-  onSave: (parsed: ParsedRunner[]) => Promise<boolean>;
-}) {
-  const [text, setText] = useState('');
-  const [open, setOpen] = useState(!hasField);
-  const [saving, setSaving] = useState(false);
-
-  const parsed = useMemo(() => parseField(text), [text]);
-  const touched = text.trim() !== '';
-
-  async function save(): Promise<void> {
-    setSaving(true);
-    const ok = await onSave(parsed.runners);
-    setSaving(false);
-    if (ok) {
-      setText('');
-      // Collapse once the leg has a field — the box is only in the way after
-      // that, and re-pasting is one tap away.
-      setOpen(false);
-    }
-  }
-
-  if (!open) {
-    return (
-      <div className="border-t border-slate-100 px-3 py-2">
-        <button type="button" onClick={() => setOpen(true)} className="tap text-xs font-medium text-slate-500 underline">
-          Re-paste field
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-2 border-t border-slate-100 px-3 py-2">
-      <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-slate-600">
-          Paste field {hasField && <span className="font-normal text-slate-400">— replaces leg {leg.leg_number}</span>}
-        </span>
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          rows={4}
-          aria-label={`Paste the field for leg ${leg.leg_number}`}
-          placeholder={'1. Alpha Male\n2 Beta Blocker\n3. Gamma Ray (11)'}
-          className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-slate-900"
-        />
-      </label>
-
-      {touched && (
-        <div data-testid={`paste-preview-${leg.leg_number}`} className="rounded-lg bg-slate-50 px-2 py-1.5 text-xs">
-          <p className="font-medium text-slate-700">
-            {parsed.runners.length} runner{parsed.runners.length === 1 ? '' : 's'} parsed
-            {parsed.skipped.length > 0 && (
-              <span className="font-normal text-amber-700">
-                {' '}
-                · {parsed.skipped.length} line{parsed.skipped.length === 1 ? '' : 's'} skipped
-              </span>
-            )}
-          </p>
-          {parsed.runners.length > 0 && (
-            <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-slate-600">
-              {parsed.runners.map((r) => (
-                <li key={r.number}>
-                  <span className="font-semibold">{r.number}</span> {r.name}
-                </li>
-              ))}
-            </ul>
-          )}
-          {parsed.skipped.length > 0 && (
-            <ul className="mt-1 text-slate-400">
-              {parsed.skipped.map((line, i) => (
-                <li key={`${line}-${i}`} className="truncate">
-                  skipped: {line}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => void save()}
-          disabled={saving || parsed.runners.length === 0}
-          aria-label={`Save field for leg ${leg.leg_number}`}
-          className="tap rounded-lg bg-emerald-600 px-3 text-sm font-semibold text-white disabled:opacity-40"
-        >
-          {saving ? 'Saving…' : `Save field${parsed.runners.length > 0 ? ` (${parsed.runners.length})` : ''}`}
-        </button>
-        {hasField && (
-          <button
-            type="button"
-            onClick={() => {
-              setText('');
-              setOpen(false);
-            }}
-            className="tap text-xs text-slate-500 underline"
-          >
-            Cancel
-          </button>
-        )}
-      </div>
-    </div>
   );
 }

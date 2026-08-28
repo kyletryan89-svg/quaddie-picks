@@ -334,3 +334,63 @@ Two of my own test bugs surfaced while doing it, both fixed:
 `npm run verify` ✓ (typecheck · lint clean · **26/26** unit tests) · `npm run build` ✓ · R2 security **16/16** · R3 auth **9/9** · M4 **25/25** · M5 **30/30** · M6 **32/32** · M7 **15/15** · M8 **34/34** · delete-guard **8/8**. No regressions.
 
 No new dependencies. `REPLICA IDENTITY FULL` was not applied to any further table.
+
+---
+
+## M10 — Feed-driven form guide (product pivot)
+
+Verified 2026-08-28 against the live Racing NSW feed, the live Supabase project and a
+running production server. The product was re-scoped by the owner: **no more manually
+created meetings, no paste-box, no seed fixtures — the app now presents the real race
+form guide for Saturday metro meetings.** Sydney only for now (see D16).
+
+### What changed
+
+- **Feed** (`lib/racedata.ts`, pure + unit-tested · `lib/feed.ts`, server fetch + TTL cache + lazy sync).
+  `Calendar_Meetings.aspx` → upcoming Saturday metro cards; `Acceptances.aspx` → runners.
+- **Schema** (migration `20260829000000_race_form.sql`): `meetings.source_key`, `legs.race_name`/`race_time`,
+  runner form columns (jockey/trainer/barrier/weight/benchmark/form), a `comments` table
+  (RLS + realtime), and a `runners_update_authenticated` policy so the sync can upsert.
+- **Meetings list** (`/`) is feed-driven: track, date, status, pick count, and the quaddie
+  race range. No "New meeting".
+- **Meeting screen**: four quaddie legs (last 4 races) with the full field as tappable
+  runners + form detail; scratched runners are marked and can't be picked; a live comment
+  box sits underneath. Paste box and outlay framing are gone.
+- **Deleted** ~3,000 lines: `meetings/new`, `createMeeting`, `lib/field-parse.ts`, and the
+  M4–M8/e2e/delete-guard test harnesses that drove the removed UI.
+
+### Evidence
+
+| Check | Result |
+|-------|--------|
+| `npm run verify` (typecheck · lint · 31/31 unit tests incl. 15 new `racedata` tests) | ✅ |
+| `npm run build` | ✅ 0 errors |
+| R2 security (RLS over the wire) | ✅ 16/16 |
+| R3 auth (login flow, Puppeteer) | ✅ 9/9 |
+| **e2e (`scripts/e2e-check.ts`, 13/13)** | ✅ |
+| — list shows real Saturday metro (not seed) | ✅ Rosehill Gardens + Royal Randwick etc. |
+| — four quaddie legs, last 4 races | ✅ R7–R10 |
+| — runners tappable with form detail (jockey/weight/barrier/form) | ✅ 36 runner buttons |
+| — tap increments pick count, no outlay framing | ✅ |
+| — two sessions, realtime pick + comment live | ✅ 0 navigations on the receiving page |
+| — 390px, no horizontal scroll | ✅ |
+
+### Live data
+
+Parsed from the real feed on 2026-08-28: 59 meetings, 4 upcoming Saturday metros
+(Rosehill Gardens 29 Aug · Royal Randwick 5 Sep · Rosehill Gardens 12 Sep · Royal
+Randwick 19 Sep). Rosehill's card = 10 races → quaddie R7–R10; the R7 field has 11
+runners, one scratched (#2), with correct jockey/barrier/weight/benchmark/form.
+
+### Cleanup performed
+
+All seed and test data wiped: 12 meetings, the 5 seed profiles, and every leftover
+test profile were removed. The only remaining profiles are the owner's.
+
+### Open / noted
+
+- **Melbourne metro** is not wired (D16) — the feed module is state-keyed so a VIC
+  source can be dropped in later.
+- Anonymous sign-in still means one profile per device; the owner currently has two
+  "Kyle" profiles from two sessions. Harmless until the ladder fills; can be revisited.
+

@@ -15,6 +15,8 @@ export interface Meeting {
   /** ISO date string, e.g. 2026-08-29 */
   meeting_date: string;
   status: MeetingStatus;
+  /** Racing NSW feed key, e.g. "2026Aug29,NSW,Rosehill Gardens". */
+  source_key: string | null;
   created_by: string | null;
   created_at: string;
 }
@@ -24,6 +26,10 @@ export interface Leg {
   meeting_id: string;
   leg_number: number;
   race_number: number | null;
+  /** Race name from the form guide, e.g. "UP AND COMING STAKES". */
+  race_name: string | null;
+  /** Jump time, e.g. "3:15PM". */
+  race_time: string | null;
   /** null until settled */
   winner_number: number | null;
   winner_name: string | null;
@@ -31,13 +37,20 @@ export interface Leg {
   winner_sp: string | null;
 }
 
-/** One runner in a leg's field, pasted in by a member (M8). */
+/** One runner in a leg's field, mirrored from the Racing NSW feed. */
 export interface Runner {
   id: string;
   leg_id: string;
   runner_number: number;
   runner_name: string | null;
   scratched: boolean;
+  /** Form-guide detail (display only; never used in scoring). */
+  jockey: string | null;
+  trainer: string | null;
+  barrier: string | null;
+  weight: string | null;
+  benchmark: string | null;
+  form: string | null;
   created_at: string;
 }
 
@@ -47,5 +60,14 @@ export interface Pick {
   leg_id: string;
   user_id: string;
   runner_id: string;
+  created_at: string;
+}
+
+/** A message on the meeting's side panel. */
+export interface Comment {
+  id: string;
+  meeting_id: string;
+  user_id: string;
+  body: string;
   created_at: string;
 }
