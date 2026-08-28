@@ -130,7 +130,7 @@ export async function syncMeeting(sourceKey: string): Promise<SyncedMeeting> {
 
   const { data: legs } = await supabase
     .from('legs')
-    .select('id, leg_number, race_number, field_source')
+    .select('id, leg_number, race_number')
     .eq('meeting_id', meetingId);
 
   // ── runners (upsert so scratchings/weights update in place) ────────────────
@@ -146,13 +146,9 @@ export async function syncMeeting(sourceKey: string): Promise<SyncedMeeting> {
     benchmark: string | null;
     form: string | null;
   }> = [];
-  const syncedLegIds: string[] = [];
-  for (const leg of (legs ?? []) as Array<{ id: string; leg_number: number; race_number: number | null; field_source: string | null }>) {
+  for (const leg of (legs ?? []) as Array<{ id: string; leg_number: number; race_number: number | null }>) {
     if (leg.race_number === null) continue;
-    // A field a member pasted by hand is never overwritten by the feed.
-    if (leg.field_source === 'manual') continue;
-    const legRunners = runnerByRace.get(leg.race_number) ?? [];
-    for (const r of legRunners) {
+    for (const r of runnerByRace.get(leg.race_number) ?? []) {
       runnerRows.push({
         leg_id: leg.id,
         runner_number: r.number,
@@ -166,7 +162,6 @@ export async function syncMeeting(sourceKey: string): Promise<SyncedMeeting> {
         form: r.form || null,
       });
     }
-    if (legRunners.length > 0) syncedLegIds.push(leg.id);
   }
 
   if (runnerRows.length > 0) {
@@ -174,10 +169,6 @@ export async function syncMeeting(sourceKey: string): Promise<SyncedMeeting> {
       onConflict: 'leg_id,runner_number',
     });
     if (runnerErr !== null) throw new Error(`Could not sync the fields: ${runnerErr.message}`);
-  }
-
-  if (syncedLegIds.length > 0) {
-    await supabase.from('legs').update({ field_source: 'feed' }).in('id', syncedLegIds);
   }
 
   return { id: meetingId, track: parsed.track, meeting_date: parsed.date, status };

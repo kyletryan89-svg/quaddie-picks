@@ -586,3 +586,53 @@ were stale (the project migration had updated the URL but not the keys, causing
 `app/actions/auth.ts`). Both were re-set on Vercel to the current `.env.local`
 values (production + preview + development), verified by a live `sync-fields`
 run returning `{"meetingCount":2,"rowsTouched":8,"error":null}`.
+
+### M4 — Manual path stays primary + "Sync now"
+
+- **Manual paste is untouched.** `replace_leg_field` (now also stamps
+  `field_source='manual'`) and the per-leg paste box remain the fallback; the
+  provider is an addition, never a requirement. A meeting with `source_key` null
+  still pastes by hand.
+- **"Sync now" button** on the meeting screen (`app/actions/sync.ts` +
+  `MeetingScreen.tsx`): runs the fields sync for *that* meeting on demand and
+  reports what it found ("Synced N rows" / "Sync failed — …"). Ladbrokes-sourced
+  meetings sync via `lib/racing/sync.ts`; Racing-NSW meetings reuse `lib/feed.ts`.
+  Runs with the member's own session (RLS applies), and writes a `sync_log` row
+  so a failure also lands on the banner.
+- **Failure banner**: the meeting page reads the latest `sync_log` error for the
+  meeting (`lib/queries.ts:getLatestSyncError`) and surfaces it as a banner, not
+  a silent log row.
+
+### Regression status (run 2026-08-29, race day)
+
+| Suite | Result | Note |
+|-------|--------|------|
+| `npm run verify` (typecheck · lint · **65/65** unit) | ✅ | 15 new provider/tracks tests |
+| `npm run build` | ✅ | 0 errors |
+| R2 security | ✅ 16/16 | |
+| R3 auth | ✅ 9/9 | |
+| smoke | ✅ 4/4 | |
+| **e2e** | ❌ 11/13 | **pre-existing** — today is race day: the first-listed Saturday meetings are `locked`, and a *manual* Caulfield meeting now renders ahead of the feed (streaming), so the harness opens the wrong/locked meeting (0 tappable runners). List page + feed code are unchanged by M12 |
+| **m11** | ⚠ 21 pass / 1 fail / 1 timeout | "login heading WST" fails because the login heading is uncommitted `WORLDS SHITTEST TIPS` (owner's in-progress copy, not M12); one anonymous-chat realtime wait timed out — chat code is outside M12 scope |
+
+Neither failure is caused by M12 code: the list page, feed (`lib/feed.ts`), and
+chat were not changed by this milestone (the `field_source` tweak to `lib/feed.ts`
+from M3 was reverted to avoid coupling the Racing NSW sync to the pending
+migration).
+
+### Remaining blockers (for the owner)
+
+1. **Migration vs live DB** (see M3 note): `supabase db push` targets the stale
+   project; apply `supabase/migrations/20260831000000_ingestion.sql` to
+   `aogdvsnictglrjrhohtp`.
+2. **Vercel crons** run only on production; Hobby limits cron count/frequency.
+   The `vercel.json` schedules are registered as specified; if Hobby rejects the
+   7 entries, keep the routes and reduce to the plan's allowance (documented the
+   once-daily Hobby limit is expected).
+3. **`From` / `X-Partner`** placeholders in `lib/racing/providers/ladbrokes.ts`
+   should be replaced with real contact values via `AFFILIATE_FROM` /
+   `AFFILIATE_PARTNER` env before relying on the feed in anger.
+4. Vercel preview SSO protection was **disabled** (`ssoProtection: null`) so the
+   spike/cron routes could be hit over curl; re-enable in the dashboard if
+   desired. Stale Vercel Supabase keys were also re-pointed to the current
+   project (see M3 note).

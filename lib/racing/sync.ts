@@ -238,6 +238,32 @@ export async function syncFields(
   return runJob(db, provider, date, 'sync-fields', (m) => syncMeetingField(db, provider, m));
 }
 
+/**
+ * Sync a single meeting's field by provider id — the "Sync now" path. Uses the
+ * existing DB row for track/date (it is already canonical), fetches the card
+ * and runners, and returns the number of rows touched.
+ */
+export async function syncMeetingFieldById(
+  db: SupabaseClient,
+  provider: Provider,
+  providerMeetingId: string,
+): Promise<number> {
+  const races = await provider.getCard(providerMeetingId);
+  const { data: existing } = await db
+    .from('meetings')
+    .select('track, meeting_date')
+    .eq('source_key', sourceKey(providerMeetingId))
+    .maybeSingle();
+  const meeting: ProviderMeeting = {
+    id: providerMeetingId,
+    track: existing?.track ?? '',
+    state: 'VIC',
+    date: existing?.meeting_date ?? '',
+    races,
+  };
+  return syncMeetingField(db, provider, meeting);
+}
+
 /** sync-scratchings: refresh the scratched flag (and late field changes). */
 export async function syncScratchings(
   db: SupabaseClient,

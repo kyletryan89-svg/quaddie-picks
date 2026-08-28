@@ -3,7 +3,7 @@ import { Suspense } from 'react';
 import { ListSkeleton } from '@/components/ErrorNote';
 import { requireProfile } from '@/lib/auth';
 import { syncMeeting } from '@/lib/feed';
-import { getComments, getMeetingBundle } from '@/lib/queries';
+import { getComments, getLatestSyncError, getMeetingBundle } from '@/lib/queries';
 import { MeetingScreen } from './MeetingScreen';
 
 export const dynamic = 'force-dynamic';
@@ -42,6 +42,15 @@ async function MeetingLoader({ meetingId, currentUserId }: { meetingId: string; 
   }
   const comments = await getComments(meetingId);
 
+  // Surface the latest sync failure as a banner (best-effort; the sync_log
+  // table may not exist yet if the migration has not been applied).
+  let syncError: string | null = null;
+  try {
+    syncError = await getLatestSyncError(meetingId);
+  } catch {
+    syncError = null;
+  }
+
   // Plain records cross the RSC boundary cleanly.
   const names: Record<string, string> = {};
   for (const [uid, displayName] of bundle.names) {
@@ -57,6 +66,7 @@ async function MeetingLoader({ meetingId, currentUserId }: { meetingId: string; 
       initialComments={comments}
       initialNames={names}
       currentUserId={currentUserId}
+      syncError={syncError}
     />
   );
 }

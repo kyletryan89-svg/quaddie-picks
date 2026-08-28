@@ -10,6 +10,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { lockMeeting, unlockMeeting } from '@/app/actions/meetings';
+import { syncMeetingNow } from '@/app/actions/sync';
 import { Comments } from '@/components/Comments';
 import { ErrorNote } from '@/components/ErrorNote';
 import { LegComments } from '@/components/LegComments';
@@ -30,6 +31,8 @@ interface Props {
   initialComments: Comment[];
   initialNames: Record<string, string>;
   currentUserId: string;
+  /** Latest sync error for this meeting, surfaced as a banner (null = none). */
+  syncError?: string | null;
 }
 
 interface RealtimePickEvent {
@@ -52,6 +55,7 @@ export function MeetingScreen({
   initialComments,
   initialNames,
   currentUserId,
+  syncError = null,
 }: Props) {
   const [runners, setRunners] = useState<Runner[]>(initialRunners);
   const [picks, setPicks] = useState<Pick[]>(initialPicks);
@@ -60,6 +64,8 @@ export function MeetingScreen({
   const [legErrors, setLegErrors] = useState<Record<number, string>>({});
   const [lockError, setLockError] = useState<string | undefined>(undefined);
   const [locking, setLocking] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | undefined>(undefined);
   const [status, setStatus] = useState(meeting.status);
   const [reopenedBy, setReopenedBy] = useState<string | null>(meeting.reopened_by ?? null);
   const [reopenedAt, setReopenedAt] = useState<string | null>(meeting.reopened_at ?? null);
@@ -314,6 +320,20 @@ export function MeetingScreen({
     router.refresh();
   }
 
+  /** Run the fields sync for this meeting on demand and report what it found. */
+  async function syncNow(): Promise<void> {
+    setSyncing(true);
+    setSyncResult(undefined);
+    const res = await syncMeetingNow(meeting.id);
+    setSyncing(false);
+    if (res.error !== undefined) {
+      setSyncResult(`Sync failed — ${res.error}`);
+      return;
+    }
+    setSyncResult(res.synced !== undefined ? `Synced ${res.synced} ${res.synced === 1 ? 'row' : 'rows'}` : 'Synced');
+    router.refresh();
+  }
+
   const reopenedLabel =
     reopenedAt !== null
       ? new Date(reopenedAt).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' }).replace(' ', '').toLowerCase()
@@ -333,8 +353,29 @@ export function MeetingScreen({
           <span className={live ? 'text-emerald-600' : 'text-slate-400'} aria-live="polite">
             {live ? '● live' : '○ offline'}
           </span>
+          {meeting.source_key !== null && (
+            <button
+              type="button"
+              onClick={() => void syncNow()}
+              disabled={syncing}
+              className="ml-auto inline-flex items-center rounded-md border border-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600 active:bg-slate-50 disabled:opacity-60"
+            >
+              {syncing ? 'Syncing…' : 'Sync now'}
+            </button>
+          )}
         </div>
       </div>
+
+      {syncError !== null && syncError !== undefined && (
+        <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Last sync failed: {syncError}
+        </div>
+      )}
+      {syncResult !== undefined && (
+        <p className="text-xs text-slate-500" data-testid="sync-result">
+          {syncResult}
+        </p>
+      )}
 
       <p className="-mb-2 text-xs leading-relaxed text-slate-400">
         Lock in your first pick, mark another as your 2. Add a comment if you wish.

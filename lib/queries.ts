@@ -143,6 +143,20 @@ export async function getComments(meetingId: string): Promise<Comment[]> {
   return (data ?? []) as Comment[];
 }
 
+/** Latest sync error for a meeting, or null when the last sync succeeded. */
+export async function getLatestSyncError(meetingId: string): Promise<string | null> {
+  const supabase = await createSupabaseServerClient();
+  const { data } = await supabase
+    .from('sync_log')
+    .select('error')
+    .eq('meeting_id', meetingId)
+    .order('started', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (data === null || data.error === null) return null;
+  return data.error as string;
+}
+
 export interface PickCount {
   pickCount: number;
   memberCount: number;
