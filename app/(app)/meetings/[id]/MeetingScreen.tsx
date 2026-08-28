@@ -3,14 +3,16 @@
 // The core screen: track, date, status, and the four quaddie legs. Each leg is
 // the real field from the Racing NSW form guide — a tappable list of runners
 // with jockey, weight, barrier and form — plus the initials of every member who
-// has taken each one. A comment box sits at the bottom. Nothing else.
+// has taken each one, first/second-pick badges, and a per-leg comment thread.
+// A locked meeting can be reopened for late scratchings. Nothing else.
 
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { lockMeeting } from '@/app/actions/meetings';
+import { lockMeeting, unlockMeeting } from '@/app/actions/meetings';
 import { Comments } from '@/components/Comments';
 import { ErrorNote } from '@/components/ErrorNote';
+import { LegComments } from '@/components/LegComments';
 import { StatusBadge } from '@/components/StatusBadge';
 import { ResultsTable } from '@/components/ResultsTable';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
@@ -58,18 +60,22 @@ export function MeetingScreen({
   const [lockError, setLockError] = useState<string | undefined>(undefined);
   const [locking, setLocking] = useState(false);
   const [status, setStatus] = useState(meeting.status);
+  const [reopenedBy, setReopenedBy] = useState<string | null>(meeting.reopened_by ?? null);
+  const [reopenedAt, setReopenedAt] = useState<string | null>(meeting.reopened_at ?? null);
 
   const statusRef = useRef(status);
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
 
-  // Adopt a status the SERVER reports (after router.refresh() following a lock
-  // or settle), using React's adjust-state-during-render pattern.
-  const [lastServerStatus, setLastServerStatus] = useState(meeting.status);
-  if (meeting.status !== lastServerStatus) {
-    setLastServerStatus(meeting.status);
+  // Adopt a meeting the SERVER reports (after router.refresh() following a lock,
+  // unlock or settle), using React's adjust-state-during-render pattern.
+  const [lastServerMeeting, setLastServerMeeting] = useState(meeting);
+  if (meeting !== lastServerMeeting) {
+    setLastServerMeeting(meeting);
     setStatus(meeting.status);
+    setReopenedBy(meeting.reopened_by ?? null);
+    setReopenedAt(meeting.reopened_at ?? null);
   }
 
   const router = useRouter();
@@ -112,6 +118,9 @@ export function MeetingScreen({
             } else if (payload.eventType === 'DELETE') {
               const gone = payload.old as Pick;
               setPicks((prev) => prev.filter((p) => p.id !== gone.id));
+            } else if (payload.eventType === 'UPDATE') {
+              const row = payload.new as Pick;
+              setPicks((prev) => prev.map((p) => (p.id === row.id ? row : p)));
             }
           },
         )
@@ -124,6 +133,8 @@ export function MeetingScreen({
               setStatus(next.status);
               if (next.status === 'settled') void router.refresh();
             }
+            if (next.reopened_by !== undefined) setReopenedBy(next.reopened_by);
+            if (next.reopened_at !== undefined) setReopenedAt(next.reopened_at);
           },
         )
         .subscribe((subStatus: string) => {
@@ -234,6 +245,28 @@ export function MeetingScreen({
     }
   }
 
+  /** Mark a pick 1st/2nd (or clear it). Handled atomically by set_pick_rank. */
+  async function rankPick(leg: Leg, pick: Pick, rank: number): Promise<void> {
+    setLegError(leg.leg_number, '');
+    const target = pick.rank === rank ? null : rank;
+    const supabase = getSupabaseBrowserClient();
+    const { error } = await supabase.rpc('set_pick_rank', { p_pick_id: pick.id, p_rank: target });
+    if (error !== null) {
+      setLegError(leg.leg_number, error.message);
+      return;
+    }
+    // Optimistic local update; the realtime UPDATE reconciles the same shape.
+    setPicks((prev) =>
+      prev.map((p) => {
+        if (p.id === pick.id) return { ...p, rank: target };
+        if (target !== null && p.leg_id === leg.id && p.user_id === currentUserId && p.rank === target) {
+          return { ...p, rank: null };
+        }
+        return p;
+      }),
+    );
+  }
+
   async function lock(): Promise<void> {
     setLocking(true);
     setLockError(undefined);
@@ -246,9 +279,26 @@ export function MeetingScreen({
     router.refresh();
   }
 
+  async function unlock(): Promise<void> {
+    setLocking(true);
+    setLockError(undefined);
+    const res = await unlockMeeting(meeting.id);
+    setLocking(false);
+    if (res.error !== undefined) {
+      setLockError(res.error);
+      return;
+    }
+    router.refresh();
+  }
+
+  const reopenedLabel =
+    reopenedAt !== null
+      ? new Date(reopenedAt).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' }).replace(' ', '').toLowerCase()
+      : '';
+
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4 lg:mx-auto lg:max-w-md">
       <div>
         <div className="flex items-center justify-between gap-2">
           <h1 className="truncate text-xl font-bold tracking-tight">{meeting.track}</h1>
@@ -279,16 +329,32 @@ export function MeetingScreen({
           </button>
         )}
         {status === 'locked' && (
-          <Link
-            href={`/meetings/${meeting.id}/settle`}
-            className="tap inline-flex items-center rounded-md bg-sky-600 px-2.5 py-1 text-xs font-semibold text-white"
-          >
-            Enter results →
-          </Link>
+          <span className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void unlock()}
+              disabled={locking}
+              className="tap rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-60"
+            >
+              {locking ? 'Reopening…' : 'Edit picks'}
+            </button>
+            <Link
+              href={`/meetings/${meeting.id}/settle`}
+              className="tap inline-flex items-center rounded-md bg-sky-600 px-2.5 py-1 text-xs font-semibold text-white"
+            >
+              Enter results →
+            </Link>
+          </span>
         )}
       </div>
 
       {lockError !== undefined && <ErrorNote message={lockError} />}
+
+      {isOpen && reopenedBy !== null && (
+        <p className="rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-600" data-testid="reopened-note">
+          Reopened by {names[reopenedBy] ?? 'Unknown'}, {reopenedLabel}
+        </p>
+      )}
 
       {!isOpen && (
         <p className="rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-600">
@@ -310,6 +376,7 @@ export function MeetingScreen({
             myCount={myCountByLeg.get(leg.id) ?? 0}
             error={legErrors[leg.leg_number]}
             onToggle={(runner) => void toggleRunner(leg, runner)}
+            onRank={(pick, rank) => void rankPick(leg, pick, rank)}
           />
         ))}
 
@@ -330,6 +397,7 @@ function LegSection({
   myCount,
   error,
   onToggle,
+  onRank,
 }: {
   leg: Leg;
   runners: Runner[];
@@ -340,6 +408,7 @@ function LegSection({
   myCount: number;
   error?: string;
   onToggle: (runner: Runner) => void;
+  onRank: (pick: Pick, rank: number) => void;
 }) {
   const winnerShown = leg.winner_number !== null && leg.winner_sp !== null;
 
@@ -390,7 +459,7 @@ function LegSection({
             ].filter((s) => s !== '');
             const formLine = formBits.join(' · ');
 
-            const body = (
+            const runnerBody = (
               <>
                 <span
                   className={`w-7 shrink-0 rounded text-center text-xs font-bold leading-6 ${
@@ -411,13 +480,17 @@ function LegSection({
                   </span>
                   {formLine !== '' && <span className="block truncate text-left text-xs text-slate-400">{formLine}</span>}
                 </span>
-                <span className="flex shrink-0 items-center gap-1">
-                  {on.map((p) => {
-                    const who = names[p.user_id] ?? '?';
-                    const isMe = p.user_id === currentUserId;
-                    return (
+              </>
+            );
+
+            const chips = (
+              <span className="flex shrink-0 items-center gap-1">
+                {on.map((p) => {
+                  const who = names[p.user_id] ?? '?';
+                  const isMe = p.user_id === currentUserId;
+                  return (
+                    <span key={p.id} className="flex items-center gap-0.5">
                       <abbr
-                        key={p.id}
                         title={isMe ? `${who} (you)` : who}
                         className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold no-underline ${
                           isMe ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600'
@@ -425,10 +498,47 @@ function LegSection({
                       >
                         {initialsOf(who)}
                       </abbr>
-                    );
-                  })}
-                </span>
-              </>
+                      {isMe && isOpen ? (
+                        <>
+                          <button
+                            type="button"
+                            aria-pressed={p.rank === 1}
+                            aria-label={`Mark ${label} as your 1st pick`}
+                            onClick={() => onRank(p, 1)}
+                            className={`inline-flex h-5 min-w-5 items-center justify-center rounded px-1 text-[10px] font-bold ${
+                              p.rank === 1 ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-400'
+                            }`}
+                          >
+                            1
+                          </button>
+                          <button
+                            type="button"
+                            aria-pressed={p.rank === 2}
+                            aria-label={`Mark ${label} as your 2nd pick`}
+                            onClick={() => onRank(p, 2)}
+                            className={`inline-flex h-5 min-w-5 items-center justify-center rounded px-1 text-[10px] font-bold ${
+                              p.rank === 2 ? 'bg-slate-600 text-white' : 'bg-slate-100 text-slate-400'
+                            }`}
+                          >
+                            2
+                          </button>
+                        </>
+                      ) : (
+                        (p.rank === 1 || p.rank === 2) && (
+                          <span
+                            title={p.rank === 1 ? '1st pick' : '2nd pick'}
+                            className={`inline-flex h-4 min-w-4 items-center justify-center rounded px-0.5 text-[9px] font-bold ${
+                              p.rank === 1 ? 'bg-amber-500 text-white' : 'bg-slate-600 text-white'
+                            }`}
+                          >
+                            {p.rank}
+                          </span>
+                        )
+                      )}
+                    </span>
+                  );
+                })}
+              </span>
             );
 
             // Scratched runners can't be picked, but a scratched runner someone
@@ -436,27 +546,28 @@ function LegSection({
             const tappable = isOpen && (!runner.scratched || mine);
 
             return (
-              <li key={runner.id}>
-                {tappable ? (
-                  <button
-                    type="button"
-                    onClick={() => onToggle(runner)}
-                    aria-pressed={mine}
-                    aria-label={`${mine ? 'Remove' : 'Pick'} ${label}`}
-                    className={`tap flex w-full items-center gap-2 px-3 py-2 text-left active:bg-slate-50 ${
-                      mine ? 'bg-emerald-50/60' : ''
-                    }`}
-                  >
-                    {body}
-                  </button>
-                ) : (
-                  <div
-                    className={`flex items-center gap-2 px-3 py-2 ${mine ? 'bg-emerald-50/60' : ''}`}
-                    aria-label={takers.length > 0 ? `${label} — picked by ${takers.join(', ')}` : label}
-                  >
-                    {body}
-                  </div>
-                )}
+              <li key={runner.id} className={mine ? 'bg-emerald-50/60' : ''}>
+                <div className="flex items-center gap-2 px-3 py-2">
+                  {tappable ? (
+                    <button
+                      type="button"
+                      onClick={() => onToggle(runner)}
+                      aria-pressed={mine}
+                      aria-label={`${mine ? 'Remove' : 'Pick'} ${label}`}
+                      className="tap flex min-w-0 flex-1 items-center gap-2 text-left active:bg-slate-50"
+                    >
+                      {runnerBody}
+                    </button>
+                  ) : (
+                    <div
+                      className="flex min-w-0 flex-1 items-center gap-2"
+                      aria-label={takers.length > 0 ? `${label} — picked by ${takers.join(', ')}` : label}
+                    >
+                      {runnerBody}
+                    </div>
+                  )}
+                  {chips}
+                </div>
               </li>
             );
           })}
@@ -468,6 +579,8 @@ function LegSection({
           {error}
         </p>
       )}
+
+      <LegComments legId={leg.id} currentUserId={currentUserId} names={names} />
     </section>
   );
 }

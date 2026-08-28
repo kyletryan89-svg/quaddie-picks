@@ -1,21 +1,33 @@
 import Link from 'next/link';
 import { Suspense } from 'react';
+import { ChatBoard } from '@/components/ChatBoard';
 import { ErrorNote, ListSkeleton } from '@/components/ErrorNote';
 import { StatusBadge } from '@/components/StatusBadge';
+import { requireProfile } from '@/lib/auth';
 import { syncMeeting, getSaturdayMeetings } from '@/lib/feed';
 import { formatDate } from '@/lib/format';
-import { getPickCountsByMeeting } from '@/lib/queries';
+import { getPickCountsByMeeting, getProfiles } from '@/lib/queries';
 import { isSaturdayMetro, lastRaces, todaySydneyISO } from '@/lib/racedata';
 
 export const dynamic = 'force-dynamic';
 
-export default function MeetingsPage() {
+export default async function MeetingsPage() {
+  const { userId } = await requireProfile();
+  const profiles = await getProfiles();
+  const names: Record<string, string> = {};
+  for (const p of profiles) names[p.id] = p.display_name;
+
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-xl font-bold tracking-tight">Saturday metro</h1>
-      <Suspense fallback={<ListSkeleton />}>
-        <UpcomingMeetings />
-      </Suspense>
+      <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start lg:gap-6">
+        <div className="flex flex-col gap-4">
+          <Suspense fallback={<ListSkeleton />}>
+            <UpcomingMeetings />
+          </Suspense>
+        </div>
+        <ChatBoard currentUserId={userId} names={names} />
+      </div>
     </div>
   );
 }

@@ -29,7 +29,7 @@ async function SettleLoader({ meetingId }: { meetingId: string }) {
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4 lg:mx-auto lg:max-w-md">
       <div>
         <h1 className="text-xl font-bold tracking-tight">Enter results</h1>
         <p className="text-sm text-slate-600">

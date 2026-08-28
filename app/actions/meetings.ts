@@ -29,6 +29,30 @@ export async function lockMeeting(meetingId: string): Promise<{ error?: string }
   return {};
 }
 
+/**
+ * Reopen a locked meeting so members can change picks for late scratchings.
+ * Any member may do this; it is impossible once the meeting is settled. The
+ * unlocker and timestamp are recorded so the screen can show who did it.
+ */
+export async function unlockMeeting(meetingId: string): Promise<{ error?: string }> {
+  const auth = await getAuthContext();
+  if (auth === null) redirect('/login');
+
+  const supabase = await createSupabaseServerClient();
+  const { error } = await supabase
+    .from('meetings')
+    .update({ status: 'open', reopened_by: auth.userId, reopened_at: new Date().toISOString() })
+    .eq('id', meetingId)
+    .eq('status', 'locked');
+
+  if (error !== null) {
+    return { error: error.message };
+  }
+  revalidatePath(`/meetings/${meetingId}`);
+  revalidatePath('/');
+  return {};
+}
+
 export interface SettleState {
   error?: string;
   /** Echoed back so a rejected settle does not wipe the form (see CreateMeetingState). */

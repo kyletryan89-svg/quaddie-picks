@@ -36,7 +36,7 @@ async function LeaderboardLoader({ searchParams }: PageProps) {
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4 lg:mx-auto lg:max-w-md">
       <div className="flex items-center justify-between gap-2">
         <h1 className="text-xl font-bold tracking-tight">Ladder</h1>
 

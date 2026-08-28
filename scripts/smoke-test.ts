@@ -57,7 +57,7 @@ async function main(): Promise<void> {
       res.status === 200 &&
       body.toLowerCase().includes('name') &&
       body.toLowerCase().includes('passcode') &&
-      body.includes('Quaddie');
+      body.includes('WST');
     checks.push({ name: 'GET /login renders the login form', ok, detail: String(res.status) });
   }
 

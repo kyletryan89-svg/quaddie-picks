@@ -13,6 +13,7 @@
     "test:security": "tsx scripts/security-tests.ts",
     "test:auth": "tsx scripts/auth-test.ts",
     "test:e2e": "tsx scripts/e2e-check.ts",
+    "test:m11": "tsx scripts/m11-check.ts",
     "seed": "tsx scripts/seed.ts",
     "smoke": "tsx scripts/smoke-test.ts"
   },

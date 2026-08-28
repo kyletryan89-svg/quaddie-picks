@@ -394,3 +394,106 @@ test profile were removed. The only remaining profiles are the owner's.
 - Anonymous sign-in still means one profile per device; the owner currently has two
   "Kyle" profiles from two sessions. Harmless until the ladder fills; can be revisited.
 
+
+---
+
+## M11 — Group features (rename · unlock · rank · per-leg comments · group chat)
+
+The brief labels this "M10", but M10 was already consumed by the feed pivot in the
+previous session, so it is logged here as M11 to keep the log sequential.
+
+Verified 2026-08-28 via `npm run test:m11` (new `scripts/m11-check.ts`, **25/25**)
+against a running server, plus the full regression.
+
+### 1. Rename → WST
+
+| Item | Result | Evidence |
+|------|--------|----------|
+| Login heading is `WST`, not "Quaddie Picks" | ✅ PASS | m11: login body matches `\bWST\b` and contains no "Quaddie" |
+| Document title is `WST` | ✅ PASS | `page.title() === 'WST'` (from `app/layout.tsx` metadata) |
+| App header brand is `WST` | ✅ PASS | header innerText has "WST", no "QuaddiePicks" |
+| `GET /login` smoke check now expects `WST` | ✅ PASS | `npm run smoke` 4/4 (updated `scripts/smoke-test.ts`) |
+
+Repo, Vercel project, database, package name, files and variables were **not**
+renamed — only user-facing text, titles, metadata, login and header.
+
+### 2. Unlock / edit after lock
+
+| Item | Result | Evidence |
+|------|--------|----------|
+| Locked meeting shows an "Edit picks" control that returns it to open | ✅ PASS | m11: `Lock picks` → `Edit picks` appears; DB status `locked` → `open` |
+| Available to any member, never once settled | ✅ PASS | `unlockMeeting` is any authenticated member; `.eq('status','locked')` guard means a settled meeting can't be touched |
+| Who and when recorded, shown on screen | ✅ PASS | m11: rendered "Reopened by M11 Ada …, 4:09pm" matching `Reopened by <name>, \d{1,2}:\d{2}(am\|pm)` |
+| RLS still allows pick insert/delete whenever open (after lock/unlock cycle) | ✅ PASS | m11 DB-level cycle: insert while OPEN ✓ · insert while LOCKED rejected ✓ · insert after UNLOCK ✓ · delete after UNLOCK ✓ |
+
+No RLS change was required — `picks` insert/delete already gated on `status='open'`
+inside the policy (M1); this run proves it holds across a full lock → unlock cycle.
+
+### 3. First and second pick (rank)
+
+`picks.rank` smallint (1, 2, or null) + partial unique index
+`picks_rank_unique (leg_id, user_id, rank) WHERE rank IS NOT NULL`. Display only —
+`lib/scoring.ts` untouched.
+
+| Item | Result | Evidence |
+|------|--------|----------|
+| Only one 1st and one 2nd per member per leg | ✅ PASS | m11: after ranking two runners, exactly one `rank=1` and one `rank=2` |
+| Setting a new 1st clears the old | ✅ PASS | m11: Alpha 1st → set Gamma 1st → Alpha null, Gamma 1st, Beta still 2nd (verified per runner via DB) |
+| Rank optional; toggling a rank off | ✅ PASS | m11: clicking the active `1` badge returns Gamma to unranked (rank null in DB) |
+| Badge shown next to the member's initials | ✅ PASS | passive `1`/`2` badge for everyone; the owner's own pick shows tappable `1`/`2` (amber = 1st, slate = 2nd) |
+| Doesn't affect scoring | ✅ PASS | `lib/scoring.ts`, `lib/meeting-score.ts`, `tests/scoring.test.ts` unmodified; verify still 31/31 |
+
+Ranking is atomic via `security definer` RPC `set_pick_rank()` (D19) — no broad
+`picks` UPDATE policy.
+
+### 4. Per-leg comments
+
+New table `leg_comments` (id, leg_id, user_id, body, created_at), RLS select-all /
+insert-own / delete-own, `REPLICA IDENTITY FULL` so filtered DELETEs broadcast
+(same as D10), in the realtime publication.
+
+| Item | Result | Evidence |
+|------|--------|----------|
+| Comment box beside each leg | ✅ PASS | 4 boxes (one per leg) + the meeting-level side panel |
+| Author + time, newest last | ✅ PASS | initials + `toLocaleTimeString`; oldest-first order, list bottom-anchored |
+| Plain text, 280-char limit | ✅ PASS | `maxLength={280}` on the input |
+| Realtime, no reload | ✅ PASS | m11: A posts, B's screen gains the text with zero navigation |
+| Persisted with author | ✅ PASS | service-role read of `leg_comments` shows body + A's user_id |
+
+### 5. Group chat board
+
+New table `chat_messages` (id, user_id, body, created_at, is_anonymous) + read view
+`chat_messages_view`; RLS select-all / insert-own / delete-own; realtime publication.
+
+| Item | Result | Evidence |
+|------|--------|----------|
+| Chat panel on the meetings list — side column on desktop | ✅ PASS | m11 at 1280px: composer visible with no toggle; list page `lg:grid-cols-[1fr_320px]` |
+| Collapsible on mobile, doesn't push the list off 390px | ✅ PASS | m11: `scrollWidth=390`; collapsed by default (composer `offsetWidth=0`), expands on tap |
+| Newest last, realtime, 500-char, plain text | ✅ PASS | `maxLength={500}` textarea; m11: A posts, B sees it live |
+| Anonymous toggle → "Anonymous" to everyone incl. poster | ✅ PASS | m11: anonymous message renders "Anonymous" on the poster's own screen |
+| **user_id omitted from the API response, not just the UI** | ✅ PASS | m11: `chat_messages_view` returns `user_id=null` for the anonymous row, while the base table still records A's id (for RLS delete-own) |
+
+Anonymous omission is enforced at the API layer via the view (D18).
+
+### Bugs found by executing M11 (fixed)
+
+1. **Per-leg "Post" buttons broke the e2e meeting-comment step.** The e2e types into
+   the meeting-level `input[aria-label="Comment"]` then clicks `button::-p-text(Post)`,
+   which after adding four per-leg boxes matched leg 1's empty Post instead. Fixed by
+   renaming the per-leg button to "Add" so "Post" stays unique to the meeting panel.
+
+### Data hygiene during the run
+
+The 29 Aug Rosehill Gardens meeting had been left `locked` (pre-existing manual-test
+state), which made the first-listed meeting un-tappable and failed e2e before any of
+my code ran. Restored it to `open` (reopened_by cleared) — it is a future Saturday
+card and open is the natural pre-race state.
+
+### Regression before commit
+
+`npm run verify` ✓ (typecheck · lint clean · **31/31** unit) · `npm run build` ✓ (0
+errors) · R2 security **16/16** · R3 auth **9/9** · e2e **13/13** · smoke **4/4** ·
+**M11 25/25**. No regressions.
+
+The M4–M8 and delete-guard harnesses were retired in the feed-pivot M10 (their UI no
+longer exists), so the runnable regression is verify/build/R2/R3/e2e/smoke.

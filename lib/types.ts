@@ -19,6 +19,9 @@ export interface Meeting {
   source_key: string | null;
   created_by: string | null;
   created_at: string;
+  /** Who last reopened a locked meeting, and when (null until then). */
+  reopened_by: string | null;
+  reopened_at: string | null;
 }
 
 export interface Leg {
@@ -61,6 +64,27 @@ export interface Pick {
   user_id: string;
   runner_id: string;
   created_at: string;
+  /** 1 = first pick, 2 = second pick, null = unranked. Display only. */
+  rank: number | null;
+}
+
+/** A comment posted against a single leg. */
+export interface LegComment {
+  id: string;
+  leg_id: string;
+  user_id: string;
+  body: string;
+  created_at: string;
+}
+
+/** A message on the group chat board. user_id is null when is_anonymous (the
+ *  read view omits it). */
+export interface ChatMessage {
+  id: string;
+  body: string;
+  created_at: string;
+  is_anonymous: boolean;
+  user_id: string | null;
 }
 
 /** A message on the meeting's side panel. */

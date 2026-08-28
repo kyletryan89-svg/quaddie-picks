@@ -18,7 +18,7 @@ export default async function LoginPage() {
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center px-6">
-      <h1 className="mb-1 text-2xl font-bold tracking-tight">Quaddie Picks</h1>
+      <h1 className="mb-1 text-2xl font-bold tracking-tight">WST</h1>
       <p className="mb-8 text-sm text-slate-600">
         Private scoring for the Saturday crew. Name + passcode, nothing else.
       </p>

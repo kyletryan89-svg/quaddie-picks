@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Quaddie Picks',
+  title: 'WST',
   description: 'Who actually picked well? Private quaddie scoring for the crew.',
 };
 
