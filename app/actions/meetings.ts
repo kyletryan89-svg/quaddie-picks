@@ -173,6 +173,8 @@ export async function settleMeeting(_prev: SettleState, formData: FormData): Pro
     winner_number: number;
     winner_name: string | null;
     winner_sp: string;
+    /** 'manual' so the results sync never overwrites what a member entered. */
+    winner_source: 'manual';
   }
   const winners: Record<number, WinnerInput> = {};
   for (const legNumber of [1, 2, 3, 4]) {
@@ -233,6 +235,7 @@ export async function settleMeeting(_prev: SettleState, formData: FormData): Pro
       winner_number: num,
       winner_name: nameRaw.length > 0 ? nameRaw : null,
       winner_sp: sp.toFixed(2),
+      winner_source: 'manual',
     };
   }
 

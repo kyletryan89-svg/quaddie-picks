@@ -497,3 +497,92 @@ errors) · R2 security **16/16** · R3 auth **9/9** · e2e **13/13** · smoke **
 
 The M4–M8 and delete-guard harnesses were retired in the feed-pivot M10 (their UI no
 longer exists), so the runnable regression is verify/build/R2/R3/e2e/smoke.
+
+---
+
+## M12 — Automated field ingestion (spike → provider → cron → manual fallback)
+
+Verified 2026-08-29. The brief labels its sub-steps M0–M4; this is the next
+milestone after M11, so it is logged as M12 to keep the log sequential. Scope:
+automate ingesting the Saturday metro race field so it is no longer a manual
+paste, with Melbourne (VIC) wired for the first time.
+
+### M0 — Spike (source selection)
+
+`app/api/spike/route.ts` deployed to Vercel **preview only** and hit from both
+`regions: ["syd1"]` and the region-unset default (`iad1`, US). Raw responses
+saved under `docs/samples/`; findings in `docs/provider-spike.md`.
+
+| Source | syd1 | iad1 (US) | Verdict |
+|--------|------|-----------|---------|
+| TAB `api.beta.tab.com.au` | 403 Access Denied (Akamai) | 200 HTML geo-block | dead |
+| **Ladbrokes/Neds affiliates API** | **200 JSON** | **200 JSON** | **use it** |
+| racing.com | HTML SPA | HTML SPA | dead (no public JSON) |
+
+### M1 — Provider adapter
+
+`lib/racing/provider.ts` (interface + domain types), `lib/racing/providers/ladbrokes.ts`
+(fetch + pure mappers, 1 req/sec + retry 429/5xx backoff ×3), `lib/racing/tracks.ts`
+(metro whitelist + name normalisation/aliases). 65 unit tests green — the
+provider mappers run against `docs/samples/` fixtures, never the live network.
+
+### M2 — Track whitelist
+
+VIC: Flemington, Caulfield, Moonee Valley, Sandown. NSW: Randwick, Rosehill
+Gardens, Warwick Farm, Canterbury Park. Matched on normalised name + aliases
+("Rosehill"→"Rosehill Gardens", "Royal Randwick"→"Randwick", "Canterbury"→
+"Canterbury Park"). Non-whitelisted meetings are never ingested.
+
+### M3 — Cron
+
+Three routes under `/api/cron/` (`sync-fields`, `sync-scratchings`,
+`sync-results`), each rejecting requests without a `CRON_SECRET` bearer token
+(verified 401 with no/wrong token, 200 with it). Sync logic in `lib/racing/sync.ts`
+is idempotent (upserts), never overwrites a manual value (`field_source` /
+`winner_source` on `legs`), and sets `scratched=true` without deleting picks
+(runner ids are stable under `on conflict (leg_id, runner_number)`). Every run
+writes a `sync_log` row (`supabase/migrations/20260831000000_ingestion.sql`).
+
+AEST→UTC conversion (AEST = UTC+10) used for the `vercel.json` cron expressions:
+
+| Job | AEST | UTC cron |
+|-----|------|----------|
+| sync-fields | Thu 18:00, Fri 18:00 | `0 8 * * 4,5` |
+| sync-scratchings | Sat 08:00 | `0 22 * * 5` |
+| sync-scratchings | Sat 10:00 | `0 0 * * 6` |
+| sync-scratchings | Sat 11:30 | `30 1 * * 6` |
+| sync-results | Sat 17:00 | `0 7 * * 6` |
+| sync-results | Sat 19:00 | `0 9 * * 6` |
+| sync-results | Sat 21:00 | `0 11 * * 6` |
+
+Crons only run on **production**; preview deployments do not schedule them. The
+plan is Hobby, which limits crons (see the blocker note below).
+
+### ⚠ Blocker — migration vs live database
+
+**The migration could not be applied to the app's live database.** `supabase
+db push --linked` targets project `cznuxzrbvmybsrjtmsvq`, but the app's
+`.env.local` and Vercel env point at `aogdvsnictglrjrhohtp` — a *different*
+Supabase project under a different account (no CLI link, no stored DB password,
+and the Management API PAT for this machine only owns `cznuxzrbvmybsrjtmsvq`).
+
+Evidence: `cznuxzrbvmybsrjtmsvq` holds the stale M10 data (4 NSW meetings);
+`aogdvsnictglrjrhohtp` holds the current data (7 meetings incl. a locked
+Rosehill + a manual Caulfield). The migration SQL is **valid** — it applied
+cleanly to `cznuxzrbvmybsrjtmsvq` (`field_source`/`winner_source` columns and
+`sync_log` table all confirmed present) — but that is the wrong project.
+
+**Remaining steps to unblock (for the owner):**
+1. `supabase link --project-ref aogdvsnictglrjrhohtp` (enter its DB password), then
+   `supabase db push`, OR paste `supabase/migrations/20260831000000_ingestion.sql`
+   into the Supabase dashboard SQL editor for `aogdvsnictglrjrhohtp`.
+2. Until then, the cron sync degrades: it creates meetings + legs but cannot
+   write runners or `sync_log` (the `field_source` select now fails **loudly**
+   — an error-check was added so this is no longer a silent partial write).
+
+Also fixed while here: the Vercel `SUPABASE_SERVICE_ROLE_KEY`/`NEXT_PUBLIC_SUPABASE_ANON_KEY`
+were stale (the project migration had updated the URL but not the keys, causing
+"Invalid API key" and — likely — the `LOGIN FAIL` the owner was chasing in
+`app/actions/auth.ts`). Both were re-set on Vercel to the current `.env.local`
+values (production + preview + development), verified by a live `sync-fields`
+run returning `{"meetingCount":2,"rowsTouched":8,"error":null}`.

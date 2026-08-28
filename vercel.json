@@ -1,4 +1,13 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "regions": ["syd1"]
+  "regions": ["syd1"],
+  "crons": [
+    { "path": "/api/cron/sync-fields", "schedule": "0 8 * * 4,5" },
+    { "path": "/api/cron/sync-scratchings", "schedule": "0 22 * * 5" },
+    { "path": "/api/cron/sync-scratchings", "schedule": "0 0 * * 6" },
+    { "path": "/api/cron/sync-scratchings", "schedule": "30 1 * * 6" },
+    { "path": "/api/cron/sync-results", "schedule": "0 7 * * 6" },
+    { "path": "/api/cron/sync-results", "schedule": "0 9 * * 6" },
+    { "path": "/api/cron/sync-results", "schedule": "0 11 * * 6" }
+  ]
 }

@@ -1,0 +1,335 @@
+// Ingestion sync: mirror the provider's metro meetings into Supabase.
+//
+// All the M3 rules live here:
+//   - idempotent (upserts; running twice yields identical rows)
+//   - never overwrites a manually entered value (field_source / winner_source)
+//   - scratchings set scratched=true and never delete picks (runner ids are
+//     stable under `on conflict (leg_id, runner_number)`, so picks survive)
+//   - every run is written to sync_log (a row per meeting, plus a job-level row
+//     when a run fails before touching any meeting)
+//
+// Pages never call these during a render — reads come from Supabase. The cron
+// routes and the "Sync now" action are the only callers.
+
+import type { SupabaseClient } from '@supabase/supabase-js';
+import type { Provider, ProviderMeeting, ProviderRace, ProviderRunner } from '@/lib/racing/provider';
+import { canonicalTrackName, isMetroTrack } from '@/lib/racing/tracks';
+
+export const SOURCE_PREFIX = 'ladbrokes:';
+
+const QUADDIE_LEGS = 4;
+
+export interface SyncSummary {
+  job: string;
+  provider: string;
+  meetingCount: number;
+  rowsTouched: number;
+  error: string | null;
+}
+
+export interface RunRow {
+  job: string;
+  provider: string;
+  meeting_id: string | null;
+  started: string;
+  rows_touched: number;
+  error: string | null;
+}
+
+function sourceKey(providerMeetingId: string): string {
+  return `${SOURCE_PREFIX}${providerMeetingId}`;
+}
+
+function lastRaces(races: ProviderRace[], n: number): ProviderRace[] {
+  const sorted = [...races].sort((a, b) => a.number - b.number);
+  return sorted.slice(-n);
+}
+
+/** AEST display time for a leg, from the provider's ISO UTC start time. */
+function raceTime(iso: string): string {
+  if (iso === '') return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return new Intl.DateTimeFormat('en-AU', {
+    timeZone: 'Australia/Sydney',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(d);
+}
+
+function runnerRow(legId: string, r: ProviderRunner) {
+  return {
+    leg_id: legId,
+    runner_number: r.number,
+    runner_name: r.name || null,
+    scratched: r.scratched,
+    jockey: r.jockey ?? null,
+    trainer: r.trainer ?? null,
+    barrier: r.barrier ?? null,
+    weight: r.weight ?? null,
+    form: r.form ?? null,
+  };
+}
+
+interface DbMeeting {
+  id: string;
+  status: string;
+}
+
+async function upsertMeeting(
+  db: SupabaseClient,
+  m: ProviderMeeting,
+): Promise<DbMeeting> {
+  const track = canonicalTrackName(m.track) ?? m.track;
+  const key = sourceKey(m.id);
+  const { data: existing } = await db
+    .from('meetings')
+    .select('id, status')
+    .eq('source_key', key)
+    .maybeSingle();
+
+  if (existing !== null) {
+    await db.from('meetings').update({ track, meeting_date: m.date }).eq('id', existing.id as string);
+    return { id: existing.id as string, status: existing.status as string };
+  }
+
+  const { data: created, error } = await db
+    .from('meetings')
+    .insert({ track, meeting_date: m.date, source_key: key, status: 'open' })
+    .select('id, status')
+    .single();
+  if (error !== null || created === null) {
+    throw new Error(`could not prepare meeting ${track}: ${error?.message ?? 'unknown'}`);
+  }
+  return { id: created.id as string, status: created.status as string };
+}
+
+/** Sync one meeting's card (legs) and, where the field is not manually owned,
+ *  the full runner field. Idempotent. */
+async function syncMeetingField(
+  db: SupabaseClient,
+  provider: Provider,
+  m: ProviderMeeting,
+): Promise<number> {
+  const meeting = await upsertMeeting(db, m);
+  const quaddie = lastRaces(m.races, QUADDIE_LEGS);
+  let rows = 0;
+
+  const legRows = quaddie.map((race, i) => ({
+    meeting_id: meeting.id,
+    leg_number: i + 1,
+    race_number: race.number,
+    race_name: race.name || null,
+    race_time: raceTime(race.startTime) || null,
+  }));
+  const { error: legErr } = await db.from('legs').upsert(legRows, { onConflict: 'meeting_id,leg_number' });
+  if (legErr !== null) throw new Error(`could not sync legs: ${legErr.message}`);
+  rows += legRows.length;
+
+  const { data: legs, error: legsErr } = await db
+    .from('legs')
+    .select('id, leg_number, race_number, field_source')
+    .eq('meeting_id', meeting.id);
+  if (legsErr !== null) throw new Error(`could not read legs: ${legsErr.message}`);
+
+  for (const leg of (legs ?? []) as Array<{
+    id: string;
+    race_number: number | null;
+    field_source: string | null;
+  }>) {
+    if (leg.race_number === null) continue;
+    if (leg.field_source === 'manual') continue; // a pasted field is never overwritten
+
+    let runners: ProviderRunner[];
+    try {
+      const race = quaddie.find((r) => r.number === leg.race_number);
+      if (race === undefined) continue;
+      runners = await provider.getRunners(race.id);
+    } catch {
+      // Acceptances not published yet — leave whatever is in the DB.
+      continue;
+    }
+
+    const rows2 = runners.map((r) => runnerRow(leg.id, r));
+    if (rows2.length > 0) {
+      const { error: runErr } = await db.from('runners').upsert(rows2, { onConflict: 'leg_id,runner_number' });
+      if (runErr !== null) throw new Error(`could not sync runners: ${runErr.message}`);
+      rows += rows2.length;
+    }
+    await db.from('legs').update({ field_source: 'feed' }).eq('id', leg.id);
+  }
+
+  return rows;
+}
+
+async function writeLog(db: SupabaseClient, row: RunRow): Promise<void> {
+  const { error } = await db.from('sync_log').insert({
+    job: row.job,
+    provider: row.provider,
+    meeting_id: row.meeting_id,
+    started: row.started,
+    finished: new Date().toISOString(),
+    rows_touched: row.rows_touched,
+    error: row.error,
+  });
+  if (error !== null) {
+    // Logging must not take down the job; this is best-effort.
+    console.error('sync_log insert failed:', error.message);
+  }
+}
+
+/**
+ * Metro meetings for a Saturday, whitelisted by track (M2).
+ *
+ * Scoped to VIC (D22): the existing Racing NSW feed already ingests NSW metro
+ * on the list page, so ingesting NSW here would create duplicate meetings.
+ * VIC (Melbourne) is the gap this milestone fills.
+ */
+async function metroMeetings(provider: Provider, date: string): Promise<ProviderMeeting[]> {
+  const meetings = await provider.getSaturdayMeetings(date);
+  return meetings.filter((m) => m.state === 'VIC' && isMetroTrack(m.track, m.state));
+}
+
+/** Run a job across every whitelisted metro meeting, logging each outcome. */
+async function runJob(
+  db: SupabaseClient,
+  provider: Provider,
+  date: string,
+  job: string,
+  work: (m: ProviderMeeting) => Promise<number>,
+): Promise<SyncSummary> {
+  const started = new Date().toISOString();
+  const meetings = await metroMeetings(provider, date);
+  let rowsTouched = 0;
+  let error: string | null = null;
+
+  if (meetings.length === 0) {
+    await writeLog(db, { job, provider: provider.name, meeting_id: null, started, rows_touched: 0, error: 'no metro meetings' });
+    return { job, provider: provider.name, meetingCount: 0, rowsTouched: 0, error: 'no metro meetings' };
+  }
+
+  for (const m of meetings) {
+    let meetingId: string | null = null;
+    try {
+      const { data } = await db
+        .from('meetings')
+        .select('id')
+        .eq('source_key', sourceKey(m.id))
+        .maybeSingle();
+      meetingId = (data?.id as string | undefined) ?? null;
+      const n = await work(m);
+      rowsTouched += n;
+      await writeLog(db, { job, provider: provider.name, meeting_id: meetingId, started, rows_touched: n, error: null });
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+      await writeLog(db, { job, provider: provider.name, meeting_id: meetingId, started, rows_touched: 0, error });
+    }
+  }
+
+  return { job, provider: provider.name, meetingCount: meetings.length, rowsTouched, error };
+}
+
+/** sync-fields: meetings + legs + runner fields for the target Saturday. */
+export async function syncFields(
+  db: SupabaseClient,
+  provider: Provider,
+  date: string,
+): Promise<SyncSummary> {
+  return runJob(db, provider, date, 'sync-fields', (m) => syncMeetingField(db, provider, m));
+}
+
+/** sync-scratchings: refresh the scratched flag (and late field changes). */
+export async function syncScratchings(
+  db: SupabaseClient,
+  provider: Provider,
+  date: string,
+): Promise<SyncSummary> {
+  return runJob(db, provider, date, 'sync-scratchings', async (m) => {
+    const { data: meeting } = await db
+      .from('meetings')
+      .select('id')
+      .eq('source_key', sourceKey(m.id))
+      .maybeSingle();
+    if (meeting === null) return 0;
+    const { data: legs, error: legsErr } = await db
+      .from('legs')
+      .select('id, race_number, field_source')
+      .eq('meeting_id', meeting.id as string);
+    if (legsErr !== null) throw new Error(`could not read legs: ${legsErr.message}`);
+    let rows = 0;
+    for (const leg of (legs ?? []) as Array<{ id: string; race_number: number | null; field_source: string | null }>) {
+      if (leg.race_number === null || leg.field_source === 'manual') continue;
+      const race = m.races.find((r) => r.number === leg.race_number);
+      if (race === undefined) continue;
+      let runners: ProviderRunner[];
+      try {
+        runners = await provider.getRunners(race.id);
+      } catch {
+        continue;
+      }
+      const rows2 = runners.map((r) => runnerRow(leg.id, r));
+      if (rows2.length > 0) {
+        const { error } = await db.from('runners').upsert(rows2, { onConflict: 'leg_id,runner_number' });
+        if (error !== null) throw new Error(`could not sync scratchings: ${error.message}`);
+        rows += rows2.length;
+      }
+    }
+    return rows;
+  });
+}
+
+/** sync-results: winner number, name and tote SP into the legs. Never
+ *  overwrites a winner a member entered by hand (winner_source = 'manual'). */
+export async function syncResults(
+  db: SupabaseClient,
+  provider: Provider,
+  date: string,
+): Promise<SyncSummary> {
+  return runJob(db, provider, date, 'sync-results', async (m) => {
+    const { data: meeting } = await db
+      .from('meetings')
+      .select('id')
+      .eq('source_key', sourceKey(m.id))
+      .maybeSingle();
+    if (meeting === null) return 0;
+    const { data: legs, error: legsErr } = await db
+      .from('legs')
+      .select('id, race_number, winner_number, winner_source')
+      .eq('meeting_id', meeting.id as string);
+    if (legsErr !== null) throw new Error(`could not read legs: ${legsErr.message}`);
+    let rows = 0;
+    for (const leg of (legs ?? []) as Array<{
+      id: string;
+      race_number: number | null;
+      winner_number: number | null;
+      winner_source: string | null;
+    }>) {
+      if (leg.race_number === null) continue;
+      if (leg.winner_source === 'manual') continue;
+      if (leg.winner_number !== null && leg.winner_source !== 'feed') continue; // legacy settled row
+
+      const race = m.races.find((r) => r.number === leg.race_number);
+      if (race === undefined) continue;
+      let result;
+      try {
+        result = await provider.getResult(race.id);
+      } catch {
+        continue;
+      }
+      if (result === null) continue; // not run yet
+
+      const { error } = await db
+        .from('legs')
+        .update({
+          winner_number: result.winnerNumber,
+          winner_name: result.winnerName,
+          winner_sp: result.winnerSp?.toFixed(2) ?? null,
+          winner_source: 'feed',
+        })
+        .eq('id', leg.id);
+      if (error !== null) throw new Error(`could not sync results: ${error.message}`);
+      rows += 1;
+    }
+    return rows;
+  });
+}
