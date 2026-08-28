@@ -6,7 +6,7 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { requireProfile } from '@/lib/auth';
 import { syncMeeting, getSaturdayMeetings } from '@/lib/feed';
 import { formatDate } from '@/lib/format';
-import { getPickCountsByMeeting, getProfiles } from '@/lib/queries';
+import { getManualMeetings, getPickCountsByMeeting, getProfiles } from '@/lib/queries';
 import { isSaturdayMetro, lastRaces, todaySydneyISO } from '@/lib/racedata';
 
 export const dynamic = 'force-dynamic';
@@ -19,11 +19,22 @@ export default async function MeetingsPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="text-xl font-bold tracking-tight">Saturday metro</h1>
+      <div className="flex items-center justify-between gap-2">
+        <h1 className="text-xl font-bold tracking-tight">Saturday metro</h1>
+        <Link
+          href="/meetings/new"
+          className="tap inline-flex items-center rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white"
+        >
+          New meeting
+        </Link>
+      </div>
       <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start lg:gap-6">
         <div className="flex flex-col gap-4">
           <Suspense fallback={<ListSkeleton />}>
             <UpcomingMeetings />
+          </Suspense>
+          <Suspense fallback={null}>
+            <ManualMeetings />
           </Suspense>
         </div>
         <ChatBoard currentUserId={userId} names={names} />
@@ -102,5 +113,49 @@ async function UpcomingMeetings() {
         </li>
       ))}
     </ul>
+  );
+}
+
+async function ManualMeetings() {
+  let meetings;
+  try {
+    meetings = await getManualMeetings();
+  } catch {
+    return null;
+  }
+
+  if (meetings.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <h2 className="text-sm font-semibold text-slate-500">Manual meetings</h2>
+      <ul className="flex flex-col gap-3">
+        {meetings.map((m) => (
+          <li key={m.meeting.id}>
+            <Link
+              href={`/meetings/${m.meeting.id}`}
+              className="block rounded-xl border border-slate-200 bg-white p-4 shadow-sm active:bg-slate-50"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-base font-semibold">{m.meeting.track}</span>
+                <StatusBadge status={m.meeting.status} />
+              </div>
+              <div className="mt-1 flex items-center justify-between text-sm text-slate-600">
+                <span>{formatDate(m.meeting.meeting_date)}</span>
+                <span>
+                  {m.memberCount === 0 ? (
+                    'No picks yet'
+                  ) : (
+                    <>
+                      {m.memberCount} picking · {m.pickCount} tip{m.pickCount === 1 ? '' : 's'}
+                    </>
+                  )}
+                </span>
+              </div>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

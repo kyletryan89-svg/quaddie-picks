@@ -16,6 +16,7 @@ import { LegComments } from '@/components/LegComments';
 import { StatusBadge } from '@/components/StatusBadge';
 import { ResultsTable } from '@/components/ResultsTable';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
+import { parseField, type ParsedRunner } from '@/lib/field-parse';
 import { formatDate, initialsOf, money } from '@/lib/format';
 import { toScoringLegs, toScoringPicks } from '@/lib/meeting-score';
 import { scoreMeeting, type UserResult } from '@/lib/scoring';
@@ -94,6 +95,8 @@ export function MeetingScreen({
     let channel: ReturnType<typeof getSupabaseBrowserClient>['channel'] | undefined;
     const supabase = getSupabaseBrowserClient();
     const legIds = legIdsKey.split(',').filter((s) => s !== '');
+    // Unique per mount — see ChatBoard for why a fixed name is not enough.
+    const topic = `picks:${meeting.id}:${crypto.randomUUID()}`;
 
     async function refreshRunners(): Promise<void> {
       const { data } = await supabase.from('runners').select('*').in('leg_id', legIds).order('runner_number');
@@ -106,7 +109,7 @@ export function MeetingScreen({
       if (data.session !== null) supabase.realtime.setAuth(data.session.access_token);
 
       channel = supabase
-        .channel(`picks:${meeting.id}`)
+        .channel(topic)
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'picks', filter: `leg_id=in.(${legIds.join(',')})` },
@@ -245,6 +248,26 @@ export function MeetingScreen({
     }
   }
 
+  /** Replace a leg's field with a freshly pasted one. */
+  async function saveField(leg: Leg, parsed: ParsedRunner[]): Promise<boolean> {
+    setLegError(leg.leg_number, '');
+    const supabase = getSupabaseBrowserClient();
+    const { data, error } = await supabase.rpc('replace_leg_field', {
+      p_leg_id: leg.id,
+      p_runners: parsed.map((r) => ({ number: r.number, name: r.name })),
+    });
+    if (error !== null) {
+      setLegError(leg.leg_number, error.message);
+      return false;
+    }
+    const fresh = (data ?? []) as Runner[];
+    setRunners((prev) => [...prev.filter((r) => r.leg_id !== leg.id), ...fresh]);
+    // Re-pasting can cascade away picks on runners that left the field.
+    const keptIds = new Set(fresh.map((r) => r.id));
+    setPicks((prev) => prev.filter((p) => p.leg_id !== leg.id || keptIds.has(p.runner_id)));
+    return true;
+  }
+
   /** Mark a pick 1st/2nd (or clear it). Handled atomically by set_pick_rank. */
   async function rankPick(leg: Leg, pick: Pick, rank: number): Promise<void> {
     setLegError(leg.leg_number, '');
@@ -313,6 +336,10 @@ export function MeetingScreen({
         </div>
       </div>
 
+      <p className="-mb-2 text-xs leading-relaxed text-slate-400">
+        Lock in your first pick, mark another as your 2. Add a comment if you wish.
+      </p>
+
       {/* Plain count of horses taken — no money, no cost framing. */}
       <div className="sticky top-12 z-[5] flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm">
         <span data-testid="picked-count">
@@ -377,6 +404,7 @@ export function MeetingScreen({
             error={legErrors[leg.leg_number]}
             onToggle={(runner) => void toggleRunner(leg, runner)}
             onRank={(pick, rank) => void rankPick(leg, pick, rank)}
+            onSaveField={(parsed) => saveField(leg, parsed)}
           />
         ))}
 
@@ -398,6 +426,7 @@ function LegSection({
   error,
   onToggle,
   onRank,
+  onSaveField,
 }: {
   leg: Leg;
   runners: Runner[];
@@ -409,8 +438,10 @@ function LegSection({
   error?: string;
   onToggle: (runner: Runner) => void;
   onRank: (pick: Pick, rank: number) => void;
+  onSaveField: (parsed: ParsedRunner[]) => Promise<boolean>;
 }) {
   const winnerShown = leg.winner_number !== null && leg.winner_sp !== null;
+  const hasField = runners.length > 0;
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -440,7 +471,7 @@ function LegSection({
 
       {runners.length === 0 ? (
         <p className="px-3 py-3 text-sm text-slate-400">
-          {isOpen ? 'Field not published yet — check back closer to race day.' : 'No field for this leg.'}
+          {isOpen ? 'No field yet — paste it below.' : 'No field for this leg.'}
         </p>
       ) : (
         <ul className="divide-y divide-slate-50">
@@ -574,6 +605,8 @@ function LegSection({
         </ul>
       )}
 
+      {isOpen && <PasteField leg={leg} hasField={hasField} onSave={onSaveField} />}
+
       {error !== undefined && error !== '' && (
         <p role="alert" className="border-t border-slate-100 px-3 py-2 text-xs text-red-600">
           {error}
@@ -582,5 +615,129 @@ function LegSection({
 
       <LegComments legId={leg.id} currentUserId={currentUserId} names={names} />
     </section>
+  );
+}
+
+/**
+ * The per-leg "Paste field" box. Shown on every leg while the meeting is open:
+ * expanded when a leg has no field yet, collapsed to a one-tap "Paste field"
+ * button once it does. Re-pasting replaces that leg's field (the RPC keeps
+ * runners that survive, so picks on them carry over).
+ */
+function PasteField({
+  leg,
+  hasField,
+  onSave,
+}: {
+  leg: Leg;
+  hasField: boolean;
+  onSave: (parsed: ParsedRunner[]) => Promise<boolean>;
+}) {
+  const [text, setText] = useState('');
+  const [open, setOpen] = useState(!hasField);
+  const [saving, setSaving] = useState(false);
+
+  const parsed = useMemo(() => parseField(text), [text]);
+  const touched = text.trim() !== '';
+
+  async function save(): Promise<void> {
+    setSaving(true);
+    const ok = await onSave(parsed.runners);
+    setSaving(false);
+    if (ok) {
+      setText('');
+      // Collapse once the leg has a field — the box is only in the way after
+      // that, and re-pasting stays one tap away.
+      setOpen(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <div className="border-t border-slate-100 px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          aria-label={`Paste field for leg ${leg.leg_number}`}
+          className="tap text-xs font-medium text-slate-500 underline"
+        >
+          Paste field
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-slate-100 px-3 py-2">
+      <label className="flex flex-col gap-1">
+        <span className="text-xs font-medium text-slate-600">
+          Paste field {hasField && <span className="font-normal text-slate-400">— replaces leg {leg.leg_number}</span>}
+        </span>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={4}
+          aria-label={`Paste the field for leg ${leg.leg_number}`}
+          placeholder={'1. Alpha Male (4) J. McDonald\n2 Beta Blocker (7)\n3. Gamma Ray (11)'}
+          className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-slate-900"
+        />
+      </label>
+
+      {touched && (
+        <div data-testid={`paste-preview-${leg.leg_number}`} className="rounded-lg bg-slate-50 px-2 py-1.5 text-xs">
+          <p className="font-medium text-slate-700">
+            {parsed.runners.length} runner{parsed.runners.length === 1 ? '' : 's'} parsed
+            {parsed.skipped.length > 0 && (
+              <span className="font-normal text-amber-700">
+                {' '}
+                · {parsed.skipped.length} line{parsed.skipped.length === 1 ? '' : 's'} skipped
+              </span>
+            )}
+          </p>
+          {parsed.runners.length > 0 && (
+            <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-slate-600">
+              {parsed.runners.map((r) => (
+                <li key={r.number}>
+                  <span className="font-semibold">{r.number}</span> {r.name}
+                </li>
+              ))}
+            </ul>
+          )}
+          {parsed.skipped.length > 0 && (
+            <ul className="mt-1 text-slate-400">
+              {parsed.skipped.map((line, i) => (
+                <li key={`${line}-${i}`} className="truncate">
+                  skipped: {line}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void save()}
+          disabled={saving || parsed.runners.length === 0}
+          aria-label={`Save field for leg ${leg.leg_number}`}
+          className="tap rounded-lg bg-emerald-600 px-3 text-sm font-semibold text-white disabled:opacity-40"
+        >
+          {saving ? 'Saving…' : `Save field${parsed.runners.length > 0 ? ` (${parsed.runners.length})` : ''}`}
+        </button>
+        {hasField && (
+          <button
+            type="button"
+            onClick={() => {
+              setText('');
+              setOpen(false);
+            }}
+            className="tap text-xs text-slate-500 underline"
+          >
+            Cancel
+          </button>
+        )}
+      </div>
+    </div>
   );
 }

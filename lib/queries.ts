@@ -106,6 +106,29 @@ export async function getMeetingBundle(meetingId: string): Promise<MeetingBundle
   };
 }
 
+/**
+ * Meetings a member created by hand (no feed source), newest first. The feed
+ * covers NSW Saturday metro only; these are the cards a member adds themselves
+ * (e.g. a Caulfield meeting) and pastes a field into.
+ */
+export async function getManualMeetings(): Promise<MeetingSummary[]> {
+  const supabase = await createSupabaseServerClient();
+
+  const { data: meetings } = await supabase
+    .from('meetings')
+    .select('*')
+    .is('source_key', null)
+    .order('meeting_date', { ascending: false });
+  const manual = (meetings ?? []) as Meeting[];
+
+  const counts = await getPickCountsByMeeting(manual.map((m) => m.id));
+  return manual.map((meeting) => ({
+    meeting,
+    pickCount: counts.get(meeting.id)?.pickCount ?? 0,
+    memberCount: counts.get(meeting.id)?.memberCount ?? 0,
+  }));
+}
+
 /** All profiles in the group (used to show every member on the leaderboard even before they pick). */
 export async function getProfiles(): Promise<Profile[]> {
   const supabase = await createSupabaseServerClient();
