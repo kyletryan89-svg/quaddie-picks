@@ -30,7 +30,13 @@ export function ChatBoard({ currentUserId, names }: Props) {
 
   useEffect(() => {
     let cancelled = false;
+    let channel: ReturnType<typeof getSupabaseBrowserClient>['channel'] | undefined;
     const supabase = getSupabaseBrowserClient();
+    // Unique per mount: the client reuses a channel by topic, and a removed
+    // channel is not synchronously gone from it, so a fixed name would hand the
+    // next mount an already-subscribed channel ("cannot add callbacks after
+    // subscribe()"). A fresh topic guarantees a fresh channel each mount.
+    const topic = `chat:${crypto.randomUUID()}`;
 
     // Read through the view so anonymous rows arrive with user_id already null.
     async function refresh(): Promise<void> {
@@ -44,20 +50,19 @@ export function ChatBoard({ currentUserId, names }: Props) {
       if (cancelled) return;
       if (data.session !== null) supabase.realtime.setAuth(data.session.access_token);
 
-      const channel = supabase
-        .channel('chat:all')
+      channel = supabase
+        .channel(topic)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_messages' }, () => {
           void refresh();
         })
         .subscribe((status: string) => {
           if (!cancelled) setLive(status === 'SUBSCRIBED');
         });
-
-      if (cancelled) void supabase.removeChannel(channel);
     })();
 
     return () => {
       cancelled = true;
+      if (channel !== undefined) void supabase.removeChannel(channel);
     };
   }, []);
 
@@ -162,6 +167,7 @@ export function ChatBoard({ currentUserId, names }: Props) {
             rows={2}
             className="w-full resize-none rounded-lg border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-slate-900"
           />
+          <p className="mt-1 text-[11px] text-slate-400">Leave a comment for all — leaving a name is optional.</p>
           <div className="mt-1.5 flex items-center justify-between gap-2">
             <label className="flex items-center gap-1.5 text-xs text-slate-500">
               <input

@@ -33,7 +33,10 @@ export function LegComments({ legId, currentUserId, names }: Props) {
 
   useEffect(() => {
     let cancelled = false;
+    let channel: ReturnType<typeof getSupabaseBrowserClient>['channel'] | undefined;
     const supabase = getSupabaseBrowserClient();
+    // Unique per mount — see ChatBoard for why a fixed name is not enough.
+    const topic = `leg-comments:${legId}:${crypto.randomUUID()}`;
 
     void (async () => {
       const { data } = await supabase
@@ -49,8 +52,8 @@ export function LegComments({ legId, currentUserId, names }: Props) {
       if (cancelled) return;
       if (session.session !== null) supabase.realtime.setAuth(session.session.access_token);
 
-      const channel = supabase
-        .channel(`leg-comments:${legId}`)
+      channel = supabase
+        .channel(topic)
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'leg_comments', filter: `leg_id=eq.${legId}` },
@@ -65,12 +68,11 @@ export function LegComments({ legId, currentUserId, names }: Props) {
           },
         )
         .subscribe();
-
-      if (cancelled) void supabase.removeChannel(channel);
     })();
 
     return () => {
       cancelled = true;
+      if (channel !== undefined) void supabase.removeChannel(channel);
     };
   }, [legId]);
 

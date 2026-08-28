@@ -31,7 +31,10 @@ export function Comments({ meetingId, currentUserId, initialComments, names }: P
 
   useEffect(() => {
     let cancelled = false;
+    let channel: ReturnType<typeof getSupabaseBrowserClient>['channel'] | undefined;
     const supabase = getSupabaseBrowserClient();
+    // Unique per mount — see ChatBoard for why a fixed name is not enough.
+    const topic = `comments:${meetingId}:${crypto.randomUUID()}`;
 
     void (async () => {
       // Restore the session and hand its JWT to the realtime socket before
@@ -41,8 +44,8 @@ export function Comments({ meetingId, currentUserId, initialComments, names }: P
       if (cancelled) return;
       if (data.session !== null) supabase.realtime.setAuth(data.session.access_token);
 
-      const channel = supabase
-        .channel(`comments:${meetingId}`)
+      channel = supabase
+        .channel(topic)
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'comments', filter: `meeting_id=eq.${meetingId}` },
@@ -59,12 +62,11 @@ export function Comments({ meetingId, currentUserId, initialComments, names }: P
         .subscribe((status: string) => {
           if (!cancelled) setLive(status === 'SUBSCRIBED');
         });
-
-      if (cancelled) void supabase.removeChannel(channel);
     })();
 
     return () => {
       cancelled = true;
+      if (channel !== undefined) void supabase.removeChannel(channel);
     };
   }, [meetingId]);
 
