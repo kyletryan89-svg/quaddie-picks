@@ -40,7 +40,8 @@ export async function login(_prev: LoginState, formData: FormData): Promise<Logi
   if (userId === undefined) {
     const { data, error } = await supabase.auth.signInAnonymously();
     if (error !== null || data.user === null) {
-      return { error: 'Could not start a session — try again.' };
+	console.error('LOGIN FAIL:', JSON.stringify(error));      
+	return { error: 'Could not start a session — try again.' };
     }
     userId = data.user.id;
   }

@@ -22,7 +22,7 @@ interface RealtimeCommentEvent {
 }
 
 export function Comments({ meetingId, currentUserId, initialComments, names }: Props) {
-  const [comments, setComments] = useState<Comment[]>(initialComments);
+  const [comments, setComments] = useState<Comment[]>(initialComments.slice(-5));
   const [body, setBody] = useState('');
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
@@ -52,7 +52,10 @@ export function Comments({ meetingId, currentUserId, initialComments, names }: P
           (payload: RealtimeCommentEvent) => {
             if (payload.eventType === 'INSERT') {
               const row = payload.new as Comment;
-              setComments((prev) => (prev.some((c) => c.id === row.id) ? prev : [...prev, row]));
+              setComments((prev) => {
+                const next = prev.some((c) => c.id === row.id) ? prev : [...prev, row];
+                return next.slice(-5);
+              });
             } else if (payload.eventType === 'DELETE') {
               const gone = payload.old as Comment;
               setComments((prev) => prev.filter((c) => c.id !== gone.id));

@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { lockMeeting, unlockMeeting } from '@/app/actions/meetings';
 import { syncMeetingNow } from '@/app/actions/sync';
+import { ChatBoard } from '@/components/ChatBoard';
 import { Comments } from '@/components/Comments';
 import { ErrorNote } from '@/components/ErrorNote';
 import { LegComments } from '@/components/LegComments';
@@ -22,6 +23,13 @@ import { formatDate, initialsOf, money } from '@/lib/format';
 import { toScoringLegs, toScoringPicks } from '@/lib/meeting-score';
 import { scoreMeeting, type UserResult } from '@/lib/scoring';
 import type { Comment, Leg, Meeting, Pick, Runner } from '@/lib/types';
+
+/** Pick ranks the screen lets a member assign, in badge order. */
+const RANKS = [
+  { n: 1, label: '1st pick', active: 'bg-amber-500 text-white' },
+  { n: 2, label: '2nd pick', active: 'bg-slate-600 text-white' },
+  { n: 3, label: '3rd pick', active: 'bg-sky-600 text-white' },
+] as const;
 
 interface Props {
   meeting: Meeting;
@@ -274,7 +282,7 @@ export function MeetingScreen({
     return true;
   }
 
-  /** Mark a pick 1st/2nd (or clear it). Handled atomically by set_pick_rank. */
+  /** Mark a pick 1st/2nd/3rd (or clear it). Handled atomically by set_pick_rank. */
   async function rankPick(leg: Leg, pick: Pick, rank: number): Promise<void> {
     setLegError(leg.leg_number, '');
     const target = pick.rank === rank ? null : rank;
@@ -342,6 +350,8 @@ export function MeetingScreen({
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col gap-4 lg:mx-auto lg:max-w-md">
+      <ChatBoard currentUserId={currentUserId} names={names} />
+
       <div>
         <div className="flex items-center justify-between gap-2">
           <h1 className="truncate text-xl font-bold tracking-tight">{meeting.track}</h1>
@@ -378,7 +388,7 @@ export function MeetingScreen({
       )}
 
       <p className="-mb-2 text-xs leading-relaxed text-slate-400">
-        Lock in your first pick, mark another as your 2. Add a comment if you wish.
+        Lock in your first pick, mark another as your 2nd or 3rd. Add a comment if you wish.
       </p>
 
       {/* Plain count of horses taken — no money, no cost framing. */}
@@ -572,35 +582,27 @@ function LegSection({
                       </abbr>
                       {isMe && isOpen ? (
                         <>
-                          <button
-                            type="button"
-                            aria-pressed={p.rank === 1}
-                            aria-label={`Mark ${label} as your 1st pick`}
-                            onClick={() => onRank(p, 1)}
-                            className={`inline-flex h-5 min-w-5 items-center justify-center rounded px-1 text-[10px] font-bold ${
-                              p.rank === 1 ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-400'
-                            }`}
-                          >
-                            1
-                          </button>
-                          <button
-                            type="button"
-                            aria-pressed={p.rank === 2}
-                            aria-label={`Mark ${label} as your 2nd pick`}
-                            onClick={() => onRank(p, 2)}
-                            className={`inline-flex h-5 min-w-5 items-center justify-center rounded px-1 text-[10px] font-bold ${
-                              p.rank === 2 ? 'bg-slate-600 text-white' : 'bg-slate-100 text-slate-400'
-                            }`}
-                          >
-                            2
-                          </button>
+                          {RANKS.map((r) => (
+                            <button
+                              key={r.n}
+                              type="button"
+                              aria-pressed={p.rank === r.n}
+                              aria-label={`Mark ${label} as your ${r.label}`}
+                              onClick={() => onRank(p, r.n)}
+                              className={`inline-flex h-5 min-w-5 items-center justify-center rounded px-1 text-[10px] font-bold ${
+                                p.rank === r.n ? r.active : 'bg-slate-100 text-slate-400'
+                              }`}
+                            >
+                              {r.n}
+                            </button>
+                          ))}
                         </>
                       ) : (
-                        (p.rank === 1 || p.rank === 2) && (
+                        RANKS.some((r) => r.n === p.rank) && (
                           <span
-                            title={p.rank === 1 ? '1st pick' : '2nd pick'}
+                            title={RANKS.find((r) => r.n === p.rank)?.label}
                             className={`inline-flex h-4 min-w-4 items-center justify-center rounded px-0.5 text-[9px] font-bold ${
-                              p.rank === 1 ? 'bg-amber-500 text-white' : 'bg-slate-600 text-white'
+                              RANKS.find((r) => r.n === p.rank)?.active
                             }`}
                           >
                             {p.rank}

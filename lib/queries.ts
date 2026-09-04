@@ -136,11 +136,16 @@ export async function getProfiles(): Promise<Profile[]> {
   return (data ?? []) as Profile[];
 }
 
-/** Comments for a meeting, oldest first. */
+/** The 5 most recent comments for a meeting, oldest first. */
 export async function getComments(meetingId: string): Promise<Comment[]> {
   const supabase = await createSupabaseServerClient();
-  const { data } = await supabase.from('comments').select('*').eq('meeting_id', meetingId).order('created_at');
-  return (data ?? []) as Comment[];
+  const { data } = await supabase
+    .from('comments')
+    .select('*')
+    .eq('meeting_id', meetingId)
+    .order('created_at', { ascending: false })
+    .limit(5);
+  return ((data ?? []) as Comment[]).reverse();
 }
 
 /** Latest sync error for a meeting, or null when the last sync succeeded. */

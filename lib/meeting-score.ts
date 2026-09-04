@@ -33,7 +33,7 @@ export function toScoringPicks(
     const runner = runnerById.get(pick.runner_id);
     const legNumber = legNumberById.get(pick.leg_id);
     if (runner === undefined || legNumber === undefined) continue;
-    out.push({ userId: pick.user_id, legNumber, runnerNumber: runner.runner_number });
+    out.push({ userId: pick.user_id, legNumber, runnerNumber: runner.runner_number, rank: pick.rank });
   }
   return out;
 }

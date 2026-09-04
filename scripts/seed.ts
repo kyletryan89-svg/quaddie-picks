@@ -13,7 +13,7 @@ import { loadEnvLocal } from './load-env';
 
 loadEnvLocal();
 
-const MEMBERS = ['Davo', 'Kylie', 'Tommo', 'Sarah', 'Jonesy'] as const;
+const MEMBERS = ['Kyle', 'Leigh', 'Steve', 'Pete', 'Chris'] as const;
 
 function requireEnv(key: string): string {
   const raw = process.env[key];

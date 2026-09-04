@@ -27,6 +27,8 @@ export interface ScoringPick {
   userId: string;
   legNumber: number;
   runnerNumber: number;
+  /** 1 = first pick, 2 = second pick, 3 = third pick, null = unranked. */
+  rank: number | null;
 }
 
 export interface UserResult {
@@ -145,4 +147,47 @@ export function scoreMeeting(legs: ScoringLeg[], picks: ScoringPick[]): UserResu
     (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0),
   );
   return results;
+}
+
+/**
+ * Leaderboard scoring: only a member's FIRST pick counts by default. A 2nd or
+ * 3rd selection only counts when EVERY roster member has a 2nd (resp. 3rd) pick
+ * in that same leg — i.e. the whole group is playing to the same depth. Unranked
+ * picks are noise and never count here.
+ *
+ * `rosterIds` is the full group; a member who has not yet made a pick in a leg
+ * simply cannot satisfy "everyone has a rank-k pick", so that rank stays gated
+ * off until everyone is in.
+ *
+ * PURE, like scoreMeeting: the roster set is passed in, nothing is read from DB.
+ */
+export function scoreMeetingRanked(
+  legs: ScoringLeg[],
+  picks: ScoringPick[],
+  rosterIds: ReadonlySet<string>,
+): UserResult[] {
+  // leg → rank (2, 3) → whether every roster member holds a pick of that rank.
+  const everyoneHas = new Map<number, Map<number, boolean>>();
+  for (const leg of legs) {
+    const byRank = new Map<number, boolean>();
+    for (const rank of [2, 3]) {
+      const holders = new Set<string>();
+      for (const p of picks) {
+        if (p.legNumber === leg.legNumber && p.rank === rank) holders.add(p.userId);
+      }
+      const all = rosterIds.size > 0 && [...rosterIds].every((id) => holders.has(id));
+      byRank.set(rank, all);
+    }
+    everyoneHas.set(leg.legNumber, byRank);
+  }
+
+  const kept = picks.filter((p) => {
+    if (p.rank === 1) return true;
+    if (p.rank === 2 || p.rank === 3) {
+      return everyoneHas.get(p.legNumber)?.get(p.rank) === true;
+    }
+    return false;
+  });
+
+  return scoreMeeting(legs, kept);
 }

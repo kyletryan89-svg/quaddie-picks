@@ -28,16 +28,14 @@ export default async function MeetingsPage() {
           New meeting
         </Link>
       </div>
-      <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start lg:gap-6">
-        <div className="flex flex-col gap-4">
-          <Suspense fallback={<ListSkeleton />}>
-            <UpcomingMeetings />
-          </Suspense>
-          <Suspense fallback={null}>
-            <ManualMeetings />
-          </Suspense>
-        </div>
-        <ChatBoard currentUserId={userId} names={names} />
+      <ChatBoard currentUserId={userId} names={names} />
+      <div className="flex flex-col gap-4">
+        <Suspense fallback={<ListSkeleton />}>
+          <UpcomingMeetings />
+        </Suspense>
+        <Suspense fallback={null}>
+          <ManualMeetings />
+        </Suspense>
       </div>
     </div>
   );

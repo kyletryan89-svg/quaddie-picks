@@ -8,6 +8,7 @@ import {
   type ScoringPick,
   potPercent,
   scoreMeeting,
+  scoreMeetingRanked,
 } from '@/lib/scoring';
 
 const scoringSourcePath = fileURLToPath(new URL('../lib/scoring.ts', import.meta.url));
@@ -18,16 +19,19 @@ const leg = (legNumber: number, winnerNumber: number | null, winnerSp: number | 
   winnerNumber,
   winnerSp,
 });
-const pick = (userId: string, legNumber: number, runnerNumber: number): ScoringPick => ({
+const pick = (userId: string, legNumber: number, runnerNumber: number, rank: number | null = null): ScoringPick => ({
   userId,
   legNumber,
   runnerNumber,
+  rank,
 });
 const resultOf = (userId: string, results: ReturnType<typeof scoreMeeting>) => {
   const r = results.find((x) => x.userId === userId);
   if (!r) throw new Error(`no result for ${userId}`);
   return r;
 };
+
+const ROSTER_IDS = ['kyle', 'leigh', 'steve', 'pete', 'chris'];
 
 describe('scoreMeeting — rubric R4', () => {
   it('1. no splitting: three users on the same winner each get the full point and the full SP', () => {
@@ -202,6 +206,70 @@ describe('scoreMeeting — rubric R4', () => {
     expect(u1.return).toBeCloseTo(3.5, 10);
     expect(u2.legsHit).toBe(0);
     expect(u2.selections).toBe(1); // still paid for the tip
+  });
+});
+
+describe('scoreMeetingRanked — leaderboard "only pay if the first pick gets up"', () => {
+  const ROSTER = new Set(['kyle', 'leigh', 'steve', 'pete', 'chris']);
+
+  it('first picks always count, even when nobody ranks a 2nd/3rd', () => {
+    const legs = [leg(1, 7, 4.5)];
+    const picks = ROSTER_IDS.map((id) => pick(id, 1, 7, 1)); // everyone's 1st is #7
+    const results = scoreMeetingRanked(legs, picks, ROSTER);
+    expect(results).toHaveLength(5);
+    for (const id of ROSTER_IDS) {
+      const r = resultOf(id, results);
+      expect(r.legsHit).toBe(1);
+      expect(r.selections).toBe(1);
+      expect(r.return).toBe(4.5);
+    }
+  });
+
+  it('a 2nd pick counts only when EVERY roster member has a 2nd in that leg', () => {
+    const legs = [leg(1, 9, 8.0)];
+    const oneMissing = ROSTER_IDS.map((id) => pick(id, 1, 1, 1)); // all 1sts miss
+    const withSeconds = [...oneMissing, ...ROSTER_IDS.slice(0, 4).map((id) => pick(id, 1, 9, 2))];
+    // pete (last id) has no 2nd ⇒ nobody's 2nd counts
+    const results = scoreMeetingRanked(legs, withSeconds, ROSTER);
+    for (const id of ROSTER_IDS) {
+      const r = resultOf(id, results);
+      expect(r.legsHit).toBe(0);
+      expect(r.selections).toBe(1); // only the 1st counts
+    }
+
+    const everyone = [...oneMissing, ...ROSTER_IDS.map((id) => pick(id, 1, 9, 2))];
+    const all = scoreMeetingRanked(legs, everyone, ROSTER);
+    expect(resultOf('kyle', all).legsHit).toBe(1);
+    expect(resultOf('kyle', all).selections).toBe(2);
+    expect(resultOf('kyle', all).return).toBe(8.0);
+  });
+
+  it('a 3rd pick counts only when EVERY roster member has a 3rd in that leg', () => {
+    const legs = [leg(1, 3, 6.0)];
+    const firsts = ROSTER_IDS.map((id) => pick(id, 1, 1, 1));
+    const seconds = ROSTER_IDS.map((id) => pick(id, 1, 2, 2));
+    const thirdsMissingOne = ROSTER_IDS.slice(0, 4).map((id) => pick(id, 1, 3, 3));
+    const missing = scoreMeetingRanked(legs, [...firsts, ...seconds, ...thirdsMissingOne], ROSTER);
+    expect(resultOf('kyle', missing).selections).toBe(2); // 1st + 2nd only
+
+    const thirds = ROSTER_IDS.map((id) => pick(id, 1, 3, 3));
+    const all = scoreMeetingRanked(legs, [...firsts, ...seconds, ...thirds], ROSTER);
+    expect(resultOf('kyle', all).selections).toBe(3);
+    expect(resultOf('kyle', all).legsHit).toBe(1);
+    expect(resultOf('kyle', all).return).toBe(6.0);
+  });
+
+  it('unranked (boxed) picks never count', () => {
+    const legs = [leg(1, 7, 4.5)];
+    const picks = [
+      pick('kyle', 1, 1, 1), // miss
+      pick('kyle', 1, 7, null), // unranked winner — noise
+    ];
+    const results = scoreMeetingRanked(legs, picks, ROSTER);
+    const r = resultOf('kyle', results);
+    expect(r.selections).toBe(1);
+    expect(r.legsHit).toBe(0);
+    expect(r.return).toBe(0);
   });
 });
 

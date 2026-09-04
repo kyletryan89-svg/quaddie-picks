@@ -17,7 +17,6 @@ export function LoginForm() {
           required
           maxLength={40}
           autoComplete="off"
-          placeholder="Davo"
           className="tap rounded-lg border border-slate-300 bg-white px-3 text-base outline-none focus:border-slate-900"
         />
       </label>

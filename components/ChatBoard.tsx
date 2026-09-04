@@ -25,7 +25,7 @@ export function ChatBoard({ currentUserId, names }: Props) {
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const [live, setLive] = useState(false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const listRef = useRef<HTMLUListElement>(null);
 
   useEffect(() => {
@@ -40,8 +40,12 @@ export function ChatBoard({ currentUserId, names }: Props) {
 
     // Read through the view so anonymous rows arrive with user_id already null.
     async function refresh(): Promise<void> {
-      const { data } = await supabase.from('chat_messages_view').select('*').order('created_at', { ascending: true });
-      if (!cancelled && data !== null) setMessages(data as ChatMessage[]);
+      const { data } = await supabase
+        .from('chat_messages_view')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(5);
+      if (!cancelled && data !== null) setMessages((data as ChatMessage[]).reverse());
     }
 
     void (async () => {
@@ -95,7 +99,7 @@ export function ChatBoard({ currentUserId, names }: Props) {
   }
 
   return (
-    <aside className="rounded-xl border border-slate-200 bg-white shadow-sm lg:sticky lg:top-16">
+    <aside className="rounded-xl border border-slate-200 bg-white shadow-sm">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}

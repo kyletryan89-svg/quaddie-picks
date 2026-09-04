@@ -64,7 +64,7 @@ export interface Pick {
   user_id: string;
   runner_id: string;
   created_at: string;
-  /** 1 = first pick, 2 = second pick, null = unranked. Display only. */
+  /** 1 = first pick, 2 = second pick, 3 = third pick, null = unranked. Display only. */
   rank: number | null;
 }
 
