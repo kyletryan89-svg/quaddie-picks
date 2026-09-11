@@ -38,6 +38,8 @@ export interface Leg {
   winner_name: string | null;
   /** numeric(7,2) arrives from PostgREST as a string — total return per $1 */
   winner_sp: string | null;
+  /** True when the race was abandoned and will never have a winner. */
+  abandoned: boolean;
 }
 
 /** One runner in a leg's field, mirrored from the Racing NSW feed. */

@@ -493,7 +493,6 @@ function LegSection({
 }) {
   const winnerShown = leg.winner_number !== null && leg.winner_sp !== null;
   const hasField = runners.length > 0;
-
   return (
     <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
       <header className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-2">
@@ -509,7 +508,9 @@ function LegSection({
             </p>
           )}
         </div>
-        {winnerShown ? (
+        {leg.abandoned ? (
+          <span className="shrink-0 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-red-700">Abandoned</span>
+        ) : winnerShown ? (
           <span className="shrink-0 text-xs font-medium text-emerald-700">
             🏆 #{leg.winner_number} {leg.winner_name ?? ''} @ ${money(Number(leg.winner_sp ?? 0))}
           </span>

@@ -82,14 +82,24 @@ async function upsertMeeting(
 ): Promise<DbMeeting> {
   const track = canonicalTrackName(m.track) ?? m.track;
   const key = sourceKey(m.id);
+
+  // Identity is (track, meeting_date), not source_key: the key differs between
+  // providers (and a manual card has none), so a Ladbrokes card must adopt any
+  // existing row for the same track+date rather than insert a duplicate that
+  // trips meetings_track_meeting_date_unique. Adoption stamps the Ladbrokes key
+  // so the meeting becomes Ladbrokes-sourced from here on.
   const { data: existing } = await db
     .from('meetings')
     .select('id, status')
-    .eq('source_key', key)
+    .eq('track', track)
+    .eq('meeting_date', m.date)
     .maybeSingle();
 
   if (existing !== null) {
-    await db.from('meetings').update({ track, meeting_date: m.date }).eq('id', existing.id as string);
+    await db
+      .from('meetings')
+      .update({ track, meeting_date: m.date, source_key: key })
+      .eq('id', existing.id as string);
     return { id: existing.id as string, status: existing.status as string };
   }
 
@@ -179,15 +189,13 @@ async function writeLog(db: SupabaseClient, row: RunRow): Promise<void> {
 }
 
 /**
- * Metro meetings for a Saturday, whitelisted by track (M2).
- *
- * Scoped to VIC (D22): the existing Racing NSW feed already ingests NSW metro
- * on the list page, so ingesting NSW here would create duplicate meetings.
- * VIC (Melbourne) is the gap this milestone fills.
+ * Metro meetings for a Saturday, whitelisted by track (M2). Ladbrokes is now the
+ * single source for every VIC + NSW metro track; the Racing NSW feed no longer
+ * creates rows, so there is no duplicate to avoid (reverses D22).
  */
 async function metroMeetings(provider: Provider, date: string): Promise<ProviderMeeting[]> {
   const meetings = await provider.getSaturdayMeetings(date);
-  return meetings.filter((m) => m.state === 'VIC' && isMetroTrack(m.track, m.state));
+  return meetings.filter((m) => isMetroTrack(m.track, m.state));
 }
 
 /** Run a job across every whitelisted metro meeting, logging each outcome. */
@@ -236,6 +244,37 @@ export async function syncFields(
   date: string,
 ): Promise<SyncSummary> {
   return runJob(db, provider, date, 'sync-fields', (m) => syncMeetingField(db, provider, m));
+}
+
+/**
+ * Create the meeting rows + quaddie legs for a Saturday without fetching the
+ * runner fields. This is the meetings-list ingestion path (replacing the Racing
+ * NSW feed): it makes a card appear as soon as the provider publishes it, and is
+ * idempotent, so it is cheap to run on every list render. Runner fields still
+ * arrive through the fields/scratchings crons and the per-meeting "Sync now".
+ */
+export async function syncMeetings(
+  db: SupabaseClient,
+  provider: Provider,
+  date: string,
+): Promise<number> {
+  const meetings = await metroMeetings(provider, date);
+  let rows = 0;
+  for (const m of meetings) {
+    const meeting = await upsertMeeting(db, m);
+    const quaddie = lastRaces(m.races, QUADDIE_LEGS);
+    const legRows = quaddie.map((race, i) => ({
+      meeting_id: meeting.id,
+      leg_number: i + 1,
+      race_number: race.number,
+      race_name: race.name || null,
+      race_time: raceTime(race.startTime) || null,
+    }));
+    const { error } = await db.from('legs').upsert(legRows, { onConflict: 'meeting_id,leg_number' });
+    if (error !== null) throw new Error(`could not sync legs: ${error.message}`);
+    rows += legRows.length;
+  }
+  return rows;
 }
 
 /**
@@ -304,58 +343,102 @@ export async function syncScratchings(
   });
 }
 
-/** sync-results: winner number, name and tote SP into the legs. Never
- *  overwrites a winner a member entered by hand (winner_source = 'manual'). */
+/** sync-results: winner number, name and tote SP into the legs, for both VIC
+ *  and NSW metro meetings. Matches the provider meeting to the DB row by
+ *  canonical track name + date — `source_key` differs between providers (and the
+ *  manual Sandown has none), so the key is not used here. Never overwrites a
+ *  winner a member entered by hand (`winner_source = 'manual'`). Auto-settles the
+ *  meeting once every leg has a winner. */
 export async function syncResults(
   db: SupabaseClient,
   provider: Provider,
   date: string,
 ): Promise<SyncSummary> {
-  return runJob(db, provider, date, 'sync-results', async (m) => {
-    const { data: meeting } = await db
-      .from('meetings')
-      .select('id')
-      .eq('source_key', sourceKey(m.id))
-      .maybeSingle();
-    if (meeting === null) return 0;
-    const { data: legs, error: legsErr } = await db
-      .from('legs')
-      .select('id, race_number, winner_number, winner_source')
-      .eq('meeting_id', meeting.id as string);
-    if (legsErr !== null) throw new Error(`could not read legs: ${legsErr.message}`);
-    let rows = 0;
-    for (const leg of (legs ?? []) as Array<{
-      id: string;
-      race_number: number | null;
-      winner_number: number | null;
-      winner_source: string | null;
-    }>) {
-      if (leg.race_number === null) continue;
-      if (leg.winner_source === 'manual') continue;
-      if (leg.winner_number !== null && leg.winner_source !== 'feed') continue; // legacy settled row
+  const started = new Date().toISOString();
+  const job = 'sync-results';
+  const meetings = (await provider.getSaturdayMeetings(date)).filter((m) =>
+    isMetroTrack(m.track, m.state),
+  );
+  let rowsTouched = 0;
+  let error: string | null = null;
 
-      const race = m.races.find((r) => r.number === leg.race_number);
-      if (race === undefined) continue;
-      let result;
-      try {
-        result = await provider.getResult(race.id);
-      } catch {
-        continue;
-      }
-      if (result === null) continue; // not run yet
+  if (meetings.length === 0) {
+    await writeLog(db, { job, provider: provider.name, meeting_id: null, started, rows_touched: 0, error: 'no metro meetings' });
+    return { job, provider: provider.name, meetingCount: 0, rowsTouched: 0, error: 'no metro meetings' };
+  }
 
-      const { error } = await db
+  for (const m of meetings) {
+    const canonical = canonicalTrackName(m.track);
+    if (canonical === null) continue;
+    let meetingId: string | null = null;
+    try {
+      const { data: rows } = await db
+        .from('meetings')
+        .select('id, track')
+        .eq('meeting_date', m.date);
+      const dbMeeting = (rows ?? []).find((r) => canonicalTrackName(r.track) === canonical);
+      if (dbMeeting === undefined) continue; // no matching meeting in the table
+      meetingId = dbMeeting.id as string;
+
+      const { data: legs, error: legsErr } = await db
         .from('legs')
-        .update({
-          winner_number: result.winnerNumber,
-          winner_name: result.winnerName,
-          winner_sp: result.winnerSp?.toFixed(2) ?? null,
-          winner_source: 'feed',
-        })
-        .eq('id', leg.id);
-      if (error !== null) throw new Error(`could not sync results: ${error.message}`);
-      rows += 1;
+        .select('id, race_number, winner_number, abandoned')
+        .eq('meeting_id', meetingId);
+      if (legsErr !== null) throw new Error(`could not read legs: ${legsErr.message}`);
+
+      let n = 0;
+      for (const leg of (legs ?? []) as Array<{
+        id: string;
+        race_number: number | null;
+        winner_number: number | null;
+        abandoned: boolean;
+      }>) {
+        // A leg with a winner (feed or manual) or a known abandonment is done.
+        if (leg.race_number === null || leg.winner_number !== null || leg.abandoned) continue;
+
+        const race = m.races.find((r) => r.number === leg.race_number);
+        if (race === undefined) continue;
+        let outcome;
+        try {
+          outcome = await provider.getOutcome(race.id);
+        } catch {
+          continue;
+        }
+        if (outcome.abandoned) {
+          const { error: abErr } = await db.from('legs').update({ abandoned: true }).eq('id', leg.id);
+          if (abErr !== null) throw new Error(`could not mark leg abandoned: ${abErr.message}`);
+          n += 1;
+        } else if (outcome.result !== null) {
+          const { error: upErr } = await db
+            .from('legs')
+            .update({
+              winner_number: outcome.result.winnerNumber,
+              winner_name: outcome.result.winnerName,
+              winner_sp: outcome.result.winnerSp?.toFixed(2) ?? null,
+              winner_source: 'feed',
+            })
+            .eq('id', leg.id);
+          if (upErr !== null) throw new Error(`could not sync results: ${upErr.message}`);
+          n += 1;
+        }
+      }
+
+      // Auto-settle once every leg is resolved: it has a winner or was abandoned.
+      const { data: done } = await db.from('legs').select('winner_number, abandoned').eq('meeting_id', meetingId);
+      const complete =
+        (done ?? []).length === 4 &&
+        (done ?? []).every((l) => l.winner_number !== null || l.abandoned === true);
+      if (complete) {
+        await db.from('meetings').update({ status: 'settled' }).eq('id', meetingId).eq('status', 'locked');
+      }
+
+      rowsTouched += n;
+      await writeLog(db, { job, provider: provider.name, meeting_id: meetingId, started, rows_touched: n, error: null });
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+      await writeLog(db, { job, provider: provider.name, meeting_id: meetingId, started, rows_touched: 0, error });
     }
-    return rows;
-  });
+  }
+
+  return { job, provider: provider.name, meetingCount: meetings.length, rowsTouched, error };
 }

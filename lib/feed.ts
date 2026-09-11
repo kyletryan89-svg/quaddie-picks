@@ -9,7 +9,7 @@
 // Sync runs with the caller's Supabase session (RLS still applies — the group
 // may read/insert/update meetings, legs and runners by policy). No service role.
 
-import { lastRaces, parseAcceptances, parseCalendar, parseMeetingKey } from '@/lib/racedata';
+import { isSaturdayMetro, lastRaces, parseAcceptances, parseCalendar, parseMeetingKey, todaySydneyISO } from '@/lib/racedata';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import type { MeetingStatus } from '@/lib/types';
 
@@ -45,6 +45,24 @@ async function fetchText(url: string): Promise<string> {
 export async function getSaturdayMeetings(): Promise<ReturnType<typeof parseCalendar>> {
   const html = await fetchText(CALENDAR_URL);
   return parseCalendar(html);
+}
+
+/**
+ * Mirror every upcoming NSW Saturday-metro meeting into the DB. This is
+ * ingestion only: the meetings list renders from the meetings table (whatever
+ * provider created each row), so a feed hiccup or a single broken meeting must
+ * never take the page down.
+ */
+export async function syncSaturdayMetro(): Promise<void> {
+  const today = todaySydneyISO();
+  const feed = await getSaturdayMeetings();
+  for (const meeting of feed.filter((m) => isSaturdayMetro(m, today))) {
+    try {
+      await syncMeeting(meeting.key);
+    } catch {
+      // Keep going — one missing/broken meeting must not stop the rest.
+    }
+  }
 }
 
 export interface SyncedMeeting {

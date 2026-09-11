@@ -63,4 +63,7 @@ export interface Provider {
   getRunners(raceId: string): Promise<ProviderRunner[]>;
   /** Winner number, name and tote SP, or null if the race has not run yet. */
   getResult(raceId: string): Promise<ProviderResult | null>;
+  /** Result and abandonment in one call. `abandoned` is true when the race was
+   *  declared off (no winner can ever exist); `result` is null until it is run. */
+  getOutcome(raceId: string): Promise<{ result: ProviderResult | null; abandoned: boolean }>;
 }

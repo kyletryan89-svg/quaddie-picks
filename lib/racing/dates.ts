@@ -35,3 +35,20 @@ export function targetSaturdayISO(): string {
   }
   return toISO(y, m, day);
 }
+
+/**
+ * The most recent Saturday on or before today (AEST). Results are about races
+ * that have already run, so this is the Saturday the results job targets: today
+ * when today is Saturday, otherwise the one just past.
+ */
+export function mostRecentSaturdayISO(): string {
+  const now = new Date();
+  const { y, m, day, weekday } = sydneyParts(now);
+  if (weekday === 'Sat') return toISO(y, m, day);
+  for (let i = 1; i <= 7; i++) {
+    const c = new Date(now.getTime() - i * 86_400_000);
+    const p = sydneyParts(c);
+    if (p.weekday === 'Sat') return toISO(p.y, p.m, p.day);
+  }
+  return toISO(y, m, day);
+}

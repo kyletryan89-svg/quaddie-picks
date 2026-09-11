@@ -50,6 +50,7 @@ interface RawEvent {
   data?: {
     race?: {
       state?: string;
+      status?: string;
     };
     results?: RawResult[] | null;
     dividends?: RawDividend[] | null;
@@ -140,10 +141,12 @@ export function mapEvent(json: unknown): {
   state: string;
   runners: ProviderRunner[];
   result: ProviderResult | null;
+  abandoned: boolean;
 } {
   const data = (json as RawEvent)?.data;
   const state = typeof data?.race?.state === 'string' ? data.race.state : '';
   const runners = (data?.runners ?? []).map(mapRunner).filter((r): r is ProviderRunner => r !== null);
+  const abandoned = data?.race?.status === 'Abandoned';
 
   let result: ProviderResult | null = null;
   const results = data?.results;
@@ -157,7 +160,7 @@ export function mapEvent(json: unknown): {
       };
     }
   }
-  return { state, runners, result };
+  return { state, runners, result, abandoned };
 }
 
 // ── HTTP layer: 1 req/sec, retry 429/5xx with backoff, max 3 attempts ────────
@@ -233,8 +236,13 @@ export class LadbrokesProvider implements Provider {
   }
 
   async getResult(raceId: string): Promise<ProviderResult | null> {
+    return (await this.getOutcome(raceId)).result;
+  }
+
+  async getOutcome(raceId: string): Promise<{ result: ProviderResult | null; abandoned: boolean }> {
     const json = await this.fetchJson(`/racing/events/${encodeURIComponent(raceId)}`);
-    return mapEvent(json).result;
+    const { result, abandoned } = mapEvent(json);
+    return { result, abandoned };
   }
 }
 

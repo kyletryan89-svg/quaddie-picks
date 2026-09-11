@@ -4,12 +4,30 @@ import { ChatBoard } from '@/components/ChatBoard';
 import { ErrorNote, ListSkeleton } from '@/components/ErrorNote';
 import { StatusBadge } from '@/components/StatusBadge';
 import { requireProfile } from '@/lib/auth';
-import { syncMeeting, getSaturdayMeetings } from '@/lib/feed';
 import { formatDate } from '@/lib/format';
-import { getManualMeetings, getPickCountsByMeeting, getProfiles } from '@/lib/queries';
-import { isSaturdayMetro, lastRaces, todaySydneyISO } from '@/lib/racedata';
+import { targetSaturdayISO } from '@/lib/racing/dates';
+import { ladbrokes } from '@/lib/racing/providers/ladbrokes';
+import { syncMeetings } from '@/lib/racing/sync';
+import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { getProfiles, getSeasonMeetings, type MeetingSummary } from '@/lib/queries';
+import { seasonFor } from '@/lib/season';
+import type { MeetingStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
+
+// Order the list around what needs doing: locked cards (results waiting) first,
+// then upcoming open cards, then settled history. Within locked/open the soonest
+// date wins; settled shows most recent first.
+const STATUS_ORDER: Record<MeetingStatus, number> = { locked: 0, open: 1, settled: 2 };
+
+function orderMeetings(a: MeetingSummary, b: MeetingSummary): number {
+  const byStatus = STATUS_ORDER[a.meeting.status] - STATUS_ORDER[b.meeting.status];
+  if (byStatus !== 0) return byStatus;
+  if (a.meeting.status === 'settled') {
+    return b.meeting.meeting_date.localeCompare(a.meeting.meeting_date);
+  }
+  return a.meeting.meeting_date.localeCompare(b.meeting.meeting_date);
+}
 
 export default async function MeetingsPage() {
   const { userId } = await requireProfile();
@@ -20,7 +38,7 @@ export default async function MeetingsPage() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-2">
-        <h1 className="text-xl font-bold tracking-tight">Saturday metro</h1>
+        <h1 className="text-xl font-bold tracking-tight">Meetings</h1>
         <Link
           href="/meetings/new"
           className="tap inline-flex items-center rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white"
@@ -29,50 +47,36 @@ export default async function MeetingsPage() {
         </Link>
       </div>
       <ChatBoard currentUserId={userId} names={names} />
-      <div className="flex flex-col gap-4">
-        <Suspense fallback={<ListSkeleton />}>
-          <UpcomingMeetings />
-        </Suspense>
-        <Suspense fallback={null}>
-          <ManualMeetings />
-        </Suspense>
-      </div>
+      <Suspense fallback={<ListSkeleton />}>
+        <MeetingsList />
+      </Suspense>
     </div>
   );
 }
 
-async function UpcomingMeetings() {
+/**
+ * Every meeting in the table for the current season. Ladbrokes (the single feed
+ * source) is synced first so a just-published card exists, but the list itself
+ * reads the table — never the feed.
+ */
+async function MeetingsList() {
   let meetings;
   try {
-    const today = todaySydneyISO();
-    const feed = await getSaturdayMeetings();
-    const upcoming = feed
-      .filter((m) => isSaturdayMetro(m, today))
-      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-
-    meetings = await Promise.all(
-      upcoming.map(async (feedMeeting) => {
-        const synced = await syncMeeting(feedMeeting.key);
-        const quaddie = lastRaces(feedMeeting.races, 4);
-        return {
-          ...synced,
-          raceCount: feedMeeting.races.length,
-          quaddieFrom: quaddie[0]?.number,
-          quaddieTo: quaddie[quaddie.length - 1]?.number,
-        };
-      }),
-    );
-
-    const counts = await getPickCountsByMeeting(meetings.map((m) => m.id));
-    meetings = meetings.map((m) => ({ ...m, count: counts.get(m.id) ?? { pickCount: 0, memberCount: 0 } }));
+    try {
+      const supabase = await createSupabaseServerClient();
+      await syncMeetings(supabase, ladbrokes, targetSaturdayISO());
+    } catch {
+      // Ingestion is best-effort; the list comes from the table regardless.
+    }
+    meetings = (await getSeasonMeetings(seasonFor())).sort(orderMeetings);
   } catch (err) {
-    return <ErrorNote message={err instanceof Error ? err.message : 'Could not load the racing calendar.'} />;
+    return <ErrorNote message={err instanceof Error ? err.message : 'Could not load meetings.'} />;
   }
 
   if (meetings.length === 0) {
     return (
       <div className="rounded-xl border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-slate-500">
-        No Saturday metro meetings coming up — check back midweek.
+        No meetings this season yet — check back midweek.
       </div>
     );
   }
@@ -80,80 +84,33 @@ async function UpcomingMeetings() {
   return (
     <ul className="flex flex-col gap-3">
       {meetings.map((m) => (
-        <li key={m.id}>
+        <li key={m.meeting.id}>
           <Link
-            href={`/meetings/${m.id}`}
+            href={`/meetings/${m.meeting.id}`}
             className="block rounded-xl border border-slate-200 bg-white p-4 shadow-sm active:bg-slate-50"
           >
             <div className="flex items-center justify-between gap-2">
-              <span className="truncate text-base font-semibold">{m.track}</span>
-              <StatusBadge status={m.status} />
+              <span className="truncate text-base font-semibold">{m.meeting.track}</span>
+              <StatusBadge status={m.meeting.status} />
             </div>
             <div className="mt-1 flex items-center justify-between text-sm text-slate-600">
-              <span>{formatDate(m.meeting_date)}</span>
+              <span>{formatDate(m.meeting.meeting_date)}</span>
               <span>
-                {m.count.memberCount === 0 ? (
+                {m.memberCount === 0 ? (
                   'No picks yet'
                 ) : (
                   <>
-                    {m.count.memberCount} picking · {m.count.pickCount} tip{m.count.pickCount === 1 ? '' : 's'}
+                    {m.memberCount} picking · {m.pickCount} tip{m.pickCount === 1 ? '' : 's'}
                   </>
                 )}
               </span>
             </div>
-            {m.quaddieFrom !== undefined && (
-              <div className="mt-1 text-xs text-slate-400">
-                {m.raceCount} races · quaddie R{m.quaddieFrom}
-                {m.quaddieTo !== m.quaddieFrom ? `–R${m.quaddieTo}` : ''}
-              </div>
+            {m.meeting.status === 'locked' && (
+              <div className="mt-1 text-xs font-medium text-amber-600">Results waiting — tap to enter</div>
             )}
           </Link>
         </li>
       ))}
     </ul>
-  );
-}
-
-async function ManualMeetings() {
-  let meetings;
-  try {
-    meetings = await getManualMeetings();
-  } catch {
-    return null;
-  }
-
-  if (meetings.length === 0) return null;
-
-  return (
-    <div className="flex flex-col gap-3">
-      <h2 className="text-sm font-semibold text-slate-500">Manual meetings</h2>
-      <ul className="flex flex-col gap-3">
-        {meetings.map((m) => (
-          <li key={m.meeting.id}>
-            <Link
-              href={`/meetings/${m.meeting.id}`}
-              className="block rounded-xl border border-slate-200 bg-white p-4 shadow-sm active:bg-slate-50"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="truncate text-base font-semibold">{m.meeting.track}</span>
-                <StatusBadge status={m.meeting.status} />
-              </div>
-              <div className="mt-1 flex items-center justify-between text-sm text-slate-600">
-                <span>{formatDate(m.meeting.meeting_date)}</span>
-                <span>
-                  {m.memberCount === 0 ? (
-                    'No picks yet'
-                  ) : (
-                    <>
-                      {m.memberCount} picking · {m.pickCount} tip{m.pickCount === 1 ? '' : 's'}
-                    </>
-                  )}
-                </span>
-              </div>
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </div>
   );
 }

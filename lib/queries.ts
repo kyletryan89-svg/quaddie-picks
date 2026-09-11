@@ -209,17 +209,20 @@ export async function getPickCountsByMeeting(meetingIds: readonly string[]): Pro
   return out;
 }
 
-/** Every SETTLED meeting inside the season, bundled for lib/leaderboard.ts. */
-export async function getSeasonSettledBundles(season: Season): Promise<MeetingBundle[]> {
+/** Every SETTLED meeting inside the given date range (inclusive), bundled for
+ *  lib/leaderboard.ts. Omit `start`/`end` for all time. */
+export async function getSettledBundles(opts: { start?: string; end?: string } = {}): Promise<MeetingBundle[]> {
   const supabase = await createSupabaseServerClient();
 
-  const { data: meetings } = await supabase
+  let query = supabase
     .from('meetings')
     .select('*')
     .eq('status', 'settled')
-    .gte('meeting_date', season.start)
-    .lte('meeting_date', season.end)
     .order('meeting_date');
+  if (opts.start !== undefined) query = query.gte('meeting_date', opts.start);
+  if (opts.end !== undefined) query = query.lte('meeting_date', opts.end);
+
+  const { data: meetings } = await query;
 
   const bundles: MeetingBundle[] = [];
   for (const meeting of (meetings ?? []) as Meeting[]) {
