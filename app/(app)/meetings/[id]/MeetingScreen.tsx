@@ -220,6 +220,28 @@ export function MeetingScreen({
     return scoreMeeting(toScoringLegs(legs), toScoringPicks(legs, runners, picks));
   }, [status, legs, runners, picks]);
 
+  const pickSummary = useMemo(() => {
+    const runnerNumberById = new Map(runners.map((r) => [r.id, r.runner_number]));
+    const pickedByLeg = new Map<string, Set<number>>();
+    for (const p of picks) {
+      const number = runnerNumberById.get(p.runner_id);
+      if (number === undefined) continue;
+      let set = pickedByLeg.get(p.leg_id);
+      if (set === undefined) {
+        set = new Set();
+        pickedByLeg.set(p.leg_id, set);
+      }
+      set.add(number);
+    }
+    const lines: string[] = [];
+    for (const leg of [...legs].sort((a, b) => a.leg_number - b.leg_number)) {
+      const set = pickedByLeg.get(leg.id);
+      if (set === undefined || set.size === 0) continue;
+      lines.push(`r${leg.race_number ?? leg.leg_number} - ${[...set].sort((a, b) => a - b).join(',')}`);
+    }
+    return lines.join('. ');
+  }, [legs, runners, picks]);
+
   // ── Actions ────────────────────────────────────────────────────────────────
   function setLegError(legNumber: number, message: string): void {
     setLegErrors((prev) => ({ ...prev, [legNumber]: message }));
@@ -458,6 +480,13 @@ export function MeetingScreen({
             onSaveField={(parsed) => saveField(leg, parsed)}
           />
         ))}
+
+      {pickSummary !== '' && (
+        <section className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+          <h2 className="text-sm font-bold">Pick summary</h2>
+          <p className="mt-1 select-all text-sm tabular-nums text-slate-700">{pickSummary}</p>
+        </section>
+      )}
 
       {status === 'settled' && <ResultsTable results={results} names={names} />}
 
