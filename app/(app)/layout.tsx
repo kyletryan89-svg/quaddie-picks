@@ -18,6 +18,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             <Link href="/" className="tap inline-flex items-center px-2 font-medium hover:text-emerald-700">
               Meetings
             </Link>
+            <Link href="/chat" className="tap inline-flex items-center px-2 font-medium hover:text-emerald-700">
+              Chat
+            </Link>
             <Link href="/leaderboard" className="tap inline-flex items-center px-2 font-medium hover:text-emerald-700">
               Ladder
             </Link>

@@ -11,7 +11,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { lockMeeting, unlockMeeting } from '@/app/actions/meetings';
 import { syncMeetingNow } from '@/app/actions/sync';
-import { ChatBoard } from '@/components/ChatBoard';
 import { Comments } from '@/components/Comments';
 import { ErrorNote } from '@/components/ErrorNote';
 import { LegComments } from '@/components/LegComments';
@@ -109,7 +108,7 @@ export function MeetingScreen({
     let channel: ReturnType<typeof getSupabaseBrowserClient>['channel'] | undefined;
     const supabase = getSupabaseBrowserClient();
     const legIds = legIdsKey.split(',').filter((s) => s !== '');
-    // Unique per mount — see ChatBoard for why a fixed name is not enough.
+    // Unique per mount — a fixed topic name is reused across remounts.
     const topic = `picks:${meeting.id}:${crypto.randomUUID()}`;
 
     async function refreshRunners(): Promise<void> {
@@ -372,8 +371,6 @@ export function MeetingScreen({
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col gap-4 lg:mx-auto lg:max-w-md">
-      <ChatBoard currentUserId={currentUserId} names={names} />
-
       <div>
         <div className="flex items-center justify-between gap-2">
           <h1 className="truncate text-xl font-bold tracking-tight">{meeting.track}</h1>

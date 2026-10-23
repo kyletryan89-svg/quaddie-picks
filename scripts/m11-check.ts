@@ -289,38 +289,26 @@ async function main(): Promise<void> {
     check('picking works again after unlock', true);
 
     // ══ Chat board ════════════════════════════════════════════════════════════
-    // Desktop: side column visible without a toggle.
+    // Chat is its own tab. The meetings list leads with cards, not the composer.
     await pageA.setViewport({ width: 1280, height: 900 });
     await pageA.goto(`${base}/`, { waitUntil: 'networkidle0' });
     await pageA.waitForSelector('main ul li a', { timeout: 30000 });
-    const desktopChatVisible = await pageA.evaluate(() => {
-      const ta = document.querySelector('textarea[aria-label="Chat message"]');
-      return ta !== null && (ta as HTMLElement).offsetWidth > 0;
-    });
-    check('chat is a visible side column on desktop (no toggle needed)', desktopChatVisible);
+    const meetingsHasChat = await pageA.evaluate(() => document.querySelector('textarea[aria-label="Chat message"]') !== null);
+    check('meetings list does not include the chat board', !meetingsHasChat);
 
-    // Mobile: collapsed by default, no horizontal scroll, meetings list on screen.
     await pageA.setViewport({ width: 390, height: 844 });
     await pageB.setViewport({ width: 390, height: 844 });
-    await pageA.goto(`${base}/`, { waitUntil: 'networkidle0' });
-    await pageB.goto(`${base}/`, { waitUntil: 'networkidle0' });
-    await pageA.waitForSelector('main ul li a', { timeout: 30000 });
-
     const listScrollW = await pageA.evaluate(() => document.documentElement.scrollWidth);
-    check('meetings list fits 390px with chat panel (no horizontal scroll)', listScrollW <= 390, `scrollWidth=${listScrollW}`);
+    check('meetings list fits 390px (no horizontal scroll)', listScrollW <= 390, `scrollWidth=${listScrollW}`);
 
-    const collapsedHidden = await pageA.evaluate(() => {
-      const ta = document.querySelector('textarea[aria-label="Chat message"]');
-      return ta === null || (ta as HTMLElement).offsetWidth === 0;
-    });
-    check('chat panel collapsed by default on mobile (390px)', collapsedHidden);
-
-    await pageA.click('aside button::-p-text(Chat)');
-    await pageB.click('aside button::-p-text(Chat)');
-    await pageA.waitForFunction(() => {
+    await pageA.goto(`${base}/chat`, { waitUntil: 'networkidle0' });
+    await pageB.goto(`${base}/chat`, { waitUntil: 'networkidle0' });
+    await pageA.waitForSelector('textarea[aria-label="Chat message"]', { timeout: 15000 });
+    const chatVisible = await pageA.evaluate(() => {
       const ta = document.querySelector('textarea[aria-label="Chat message"]');
       return ta !== null && (ta as HTMLElement).offsetWidth > 0;
-    }, { timeout: 10000 });
+    });
+    check('chat page shows the composer', chatVisible);
 
     const normalMsg = `normal hello ${stamp}`;
     await pageA.type('textarea[aria-label="Chat message"]', normalMsg);

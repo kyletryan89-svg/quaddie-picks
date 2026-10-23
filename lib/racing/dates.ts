@@ -19,6 +19,12 @@ function toISO(y: number, m: number, day: number): string {
   return `${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
+/** Today's calendar date in Australia/Sydney, as YYYY-MM-DD. */
+export function sydneyTodayISO(now: Date = new Date()): string {
+  const { y, m, day } = sydneyParts(now);
+  return toISO(y, m, day);
+}
+
 /**
  * The Saturday the jobs should target: today when today is Saturday (the
  * scratchings/results jobs run on Saturday), otherwise the next Saturday (the
