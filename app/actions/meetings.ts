@@ -1,6 +1,6 @@
 'use server';
 
-// Meeting lifecycle actions: create (+ its 4 legs), lock, settle. Feed meetings
+// Meeting lifecycle actions: create (+ its 4 legs) and settle. Feed meetings
 // are synced by lib/feed.ts; this file also lets a member create one by hand —
 // the only way to run a card the feed does not cover (e.g. Caulfield, VIC).
 // Every action re-checks auth server-side; RLS remains the real gate.
@@ -71,26 +71,6 @@ export async function createMeeting(_prev: CreateMeetingState, formData: FormDat
 
   revalidatePath('/');
   redirect(`/meetings/${meeting.id}`);
-}
-
-export async function lockMeeting(meetingId: string): Promise<{ error?: string }> {
-  const auth = await getAuthContext();
-  if (auth === null) redirect('/login');
-
-  const supabase = await createSupabaseServerClient();
-  // Guard against locking an already-settled meeting; RLS still enforces the rest.
-  const { error } = await supabase
-    .from('meetings')
-    .update({ status: 'locked' })
-    .eq('id', meetingId)
-    .eq('status', 'open');
-
-  if (error !== null) {
-    return { error: error.message };
-  }
-  revalidatePath(`/meetings/${meetingId}`);
-  revalidatePath('/');
-  return {};
 }
 
 /**
@@ -165,8 +145,8 @@ export async function settleMeeting(_prev: SettleState, formData: FormData): Pro
   const supabase = await createSupabaseServerClient();
   const { data: meeting } = await supabase.from('meetings').select('status').eq('id', meetingId).maybeSingle();
   if (meeting === null) return { error: 'Meeting not found.', values };
-  if (meeting.status !== 'locked') {
-    return { error: 'Only a locked meeting can be settled.', values };
+  if (meeting.status === 'settled') {
+    return { error: 'This meeting is already settled.', values };
   }
 
   interface WinnerInput {
@@ -254,7 +234,7 @@ export async function settleMeeting(_prev: SettleState, formData: FormData): Pro
     .from('meetings')
     .update({ status: 'settled' })
     .eq('id', meetingId)
-    .eq('status', 'locked');
+    .in('status', ['open', 'locked']);
   if (statusError !== null) {
     return { error: `Winners saved but status change failed: ${statusError.message}`, values };
   }

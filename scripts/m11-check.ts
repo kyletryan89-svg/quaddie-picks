@@ -2,8 +2,8 @@
 //
 // Run: BASE_URL=http://localhost:3000 npm run test:m11
 //
-// Covers: rename (WST), unlock-for-late-scratchings (+ RLS after a lock/unlock
-// cycle), first/second picks, per-leg comments, and the group chat board
+// Covers: rename (WST), picks staying editable (no Lock picks button, plus RLS
+// after a direct lock/unlock), first/second picks, per-leg comments, and chat
 // (including the anonymous user_id omission). Drives two real browsers plus
 // service-role and member-session clients for database truth. Cleans up after.
 
@@ -266,27 +266,17 @@ async function main(): Promise<void> {
       check('leg comment persisted with author', data.some((c) => c.body === commentText && c.user_id === userA), JSON.stringify(data));
     }
 
-    // Unlock UI: A locks, then edits picks (reopens).
-    await pageA.click('button::-p-text(Lock picks)');
-    await pageA.waitForSelector('button::-p-text(Edit picks)', { timeout: 10000 });
-    const lockedDb = await admin.from('meetings').select('status').eq('id', uiMeetingId!).single();
-    check('locking sets status to locked', lockedDb.data?.status === 'locked');
-
-    await pageA.click('button::-p-text(Edit picks)');
-    await pageA.waitForFunction(() => document.body.innerText.includes('Reopened by'), { timeout: 10000 });
-    const reopenedText = await pageA.evaluate(() => document.body.innerText);
-    check(
-      'reopened note shows who and when',
-      new RegExp(`Reopened by ${nameA}, \\d{1,2}:\\d{2}(am|pm)`).test(reopenedText),
-      reopenedText.split('\n').find((l) => l.includes('Reopened by')),
+    // Lock picks is gone. The card stays open and another runner can still be taken.
+    const hasLockButton = await pageA.evaluate(() =>
+      [...document.querySelectorAll('button')].some((b) => (b.textContent ?? '').includes('Lock picks')),
     );
-    const openDb = await admin.from('meetings').select('status').eq('id', uiMeetingId!).single();
-    check('meeting returned to open after unlock', openDb.data?.status === 'open');
+    check('lock picks button is not on the meeting screen', !hasLockButton);
+    const stillOpen = await admin.from('meetings').select('status').eq('id', uiMeetingId!).single();
+    check('picking does not lock the meeting', stillOpen.data?.status === 'open', stillOpen.data?.status);
 
-    // After unlock, A can pick again (RLS + UI both open).
     await pageA.click('button[aria-label="Pick 4 Delta"]');
     await pageA.waitForFunction(() => document.querySelector('[data-testid="picked-count"]')?.textContent?.includes('4'), { timeout: 10000 });
-    check('picking works again after unlock', true);
+    check('picking still works without a lock button', true);
 
     // ══ Chat board ════════════════════════════════════════════════════════════
     // Chat is its own tab. The meetings list leads with cards, not the composer.

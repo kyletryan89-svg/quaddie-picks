@@ -4,12 +4,13 @@
 // the real field from the Racing NSW form guide — a tappable list of runners
 // with jockey, weight, barrier and form — plus the initials of every member who
 // has taken each one, first/second-pick badges, and a per-leg comment thread.
-// A locked meeting can be reopened for late scratchings. Nothing else.
+// A meeting already marked locked can be reopened for late scratchings.
+// Members do not lock picks themselves.
 
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { lockMeeting, unlockMeeting } from '@/app/actions/meetings';
+import { unlockMeeting } from '@/app/actions/meetings';
 import { syncMeetingNow } from '@/app/actions/sync';
 import { Comments } from '@/components/Comments';
 import { ErrorNote } from '@/components/ErrorNote';
@@ -82,7 +83,7 @@ export function MeetingScreen({
     statusRef.current = status;
   }, [status]);
 
-  // Adopt a meeting the SERVER reports (after router.refresh() following a lock,
+  // Adopt a meeting the SERVER reports (after router.refresh() following an
   // unlock or settle), using React's adjust-state-during-render pattern.
   const [lastServerMeeting, setLastServerMeeting] = useState(meeting);
   if (meeting !== lastServerMeeting) {
@@ -325,18 +326,6 @@ export function MeetingScreen({
     );
   }
 
-  async function lock(): Promise<void> {
-    setLocking(true);
-    setLockError(undefined);
-    const res = await lockMeeting(meeting.id);
-    setLocking(false);
-    if (res.error !== undefined) {
-      setLockError(res.error);
-      return;
-    }
-    router.refresh();
-  }
-
   async function unlock(): Promise<void> {
     setLocking(true);
     setLockError(undefined);
@@ -407,7 +396,7 @@ export function MeetingScreen({
       )}
 
       <p className="-mb-2 text-xs leading-relaxed text-slate-400">
-        Lock in your first pick, mark another as your 2nd or 3rd. Add a comment if you wish.
+        Mark your first pick, and another as your 2nd or 3rd. Add a comment if you wish.
       </p>
 
       {/* Plain count of horses taken — no money, no cost framing. */}
@@ -415,26 +404,18 @@ export function MeetingScreen({
         <span data-testid="picked-count">
           <strong>{myTotal}</strong> {myTotal === 1 ? 'horse' : 'horses'} picked
         </span>
-        {isOpen && (
-          <button
-            type="button"
-            onClick={() => void lock()}
-            disabled={locking}
-            className="tap rounded-md bg-amber-500 px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-60"
-          >
-            {locking ? 'Locking…' : 'Lock picks'}
-          </button>
-        )}
-        {status === 'locked' && (
+        {status !== 'settled' && (
           <span className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void unlock()}
-              disabled={locking}
-              className="tap rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-60"
-            >
-              {locking ? 'Reopening…' : 'Edit picks'}
-            </button>
+            {status === 'locked' && (
+              <button
+                type="button"
+                onClick={() => void unlock()}
+                disabled={locking}
+                className="tap rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-60"
+              >
+                {locking ? 'Reopening…' : 'Edit picks'}
+              </button>
+            )}
             <Link
               href={`/meetings/${meeting.id}/settle`}
               className="tap inline-flex items-center rounded-md bg-sky-600 px-2.5 py-1 text-xs font-semibold text-white"
