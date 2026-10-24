@@ -19,6 +19,7 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { ResultsTable } from '@/components/ResultsTable';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 import { parseField, type ParsedRunner } from '@/lib/field-parse';
+import { formatBetSlip } from '@/lib/bet-slip';
 import { formatDate, initialsOf, money } from '@/lib/format';
 import { toScoringLegs, toScoringPicks } from '@/lib/meeting-score';
 import { scoreMeeting, type UserResult } from '@/lib/scoring';
@@ -74,6 +75,8 @@ export function MeetingScreen({
   const [locking, setLocking] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | undefined>(undefined);
+  const [copyLabel, setCopyLabel] = useState('Copy');
+  const copyTimer = useRef<number | undefined>(undefined);
   const [status, setStatus] = useState(meeting.status);
   const [reopenedBy, setReopenedBy] = useState<string | null>(meeting.reopened_by ?? null);
   const [reopenedAt, setReopenedAt] = useState<string | null>(meeting.reopened_at ?? null);
@@ -220,27 +223,28 @@ export function MeetingScreen({
     return scoreMeeting(toScoringLegs(legs), toScoringPicks(legs, runners, picks));
   }, [status, legs, runners, picks]);
 
-  const pickSummary = useMemo(() => {
-    const runnerNumberById = new Map(runners.map((r) => [r.id, r.runner_number]));
-    const pickedByLeg = new Map<string, Set<number>>();
-    for (const p of picks) {
-      const number = runnerNumberById.get(p.runner_id);
-      if (number === undefined) continue;
-      let set = pickedByLeg.get(p.leg_id);
-      if (set === undefined) {
-        set = new Set();
-        pickedByLeg.set(p.leg_id, set);
-      }
-      set.add(number);
+  const slipText = useMemo(
+    () =>
+      formatBetSlip(
+        legs.map((l) => ({ id: l.id, legNumber: l.leg_number, raceNumber: l.race_number })),
+        runners.map((r) => ({ id: r.id, legId: r.leg_id, number: r.runner_number, scratched: r.scratched })),
+        picks.map((p) => ({ runnerId: p.runner_id, rank: p.rank })),
+      ),
+    [legs, runners, picks],
+  );
+
+  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
+
+  async function copySlip(): Promise<void> {
+    window.clearTimeout(copyTimer.current);
+    try {
+      await navigator.clipboard.writeText(slipText);
+      setCopyLabel('Copied');
+    } catch {
+      setCopyLabel('Copy failed');
     }
-    const lines: string[] = [];
-    for (const leg of [...legs].sort((a, b) => a.leg_number - b.leg_number)) {
-      const set = pickedByLeg.get(leg.id);
-      if (set === undefined || set.size === 0) continue;
-      lines.push(`r${leg.race_number ?? leg.leg_number} - ${[...set].sort((a, b) => a - b).join(',')}`);
-    }
-    return lines.join('. ');
-  }, [legs, runners, picks]);
+    copyTimer.current = window.setTimeout(() => setCopyLabel('Copy'), 2000);
+  }
 
   // ── Actions ────────────────────────────────────────────────────────────────
   function setLegError(legNumber: number, message: string): void {
@@ -395,6 +399,25 @@ export function MeetingScreen({
         </p>
       )}
 
+      <section aria-label="Picks" className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-sm font-bold">Picks</h2>
+          <button
+            type="button"
+            onClick={() => void copySlip()}
+            className="tap rounded-md bg-slate-900 px-2.5 py-1 text-xs font-semibold text-white"
+          >
+            {copyLabel}
+          </button>
+        </div>
+        <pre
+          data-testid="bet-slip"
+          className="mt-1 whitespace-pre-wrap font-mono text-sm leading-5 tabular-nums text-slate-800"
+        >
+          {slipText === '' ? 'No races on this card yet.' : slipText}
+        </pre>
+      </section>
+
       <p className="-mb-2 text-xs leading-relaxed text-slate-400">
         Mark your first pick, and another as your 2nd or 3rd. Add a comment if you wish.
       </p>
@@ -458,13 +481,6 @@ export function MeetingScreen({
             onSaveField={(parsed) => saveField(leg, parsed)}
           />
         ))}
-
-      {pickSummary !== '' && (
-        <section className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
-          <h2 className="text-sm font-bold">Pick summary</h2>
-          <p className="mt-1 select-all text-sm tabular-nums text-slate-700">{pickSummary}</p>
-        </section>
-      )}
 
       {status === 'settled' && <ResultsTable results={results} names={names} />}
 
