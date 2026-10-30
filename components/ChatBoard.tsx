@@ -7,6 +7,7 @@
 // (reads go through chat_messages_view, which omits it).
 
 import { useEffect, useRef, useState } from 'react';
+import { hasDisplayName, NAME_REQUIRED } from '@/lib/display-name';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 import { initialsOf } from '@/lib/format';
 import type { ChatMessage } from '@/lib/types';
@@ -77,6 +78,11 @@ export function ChatBoard({ currentUserId, names }: Props) {
   async function post(): Promise<void> {
     const text = body.trim();
     if (text === '' || posting) return;
+    if (!hasDisplayName(names, currentUserId)) {
+      setError(NAME_REQUIRED);
+      document.getElementById('your-name')?.focus();
+      return;
+    }
     setPosting(true);
     setError(undefined);
     const supabase = getSupabaseBrowserClient();

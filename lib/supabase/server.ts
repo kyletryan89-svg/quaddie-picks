@@ -24,8 +24,8 @@ export async function createSupabaseServerClient() {
           });
         } catch {
           // Called from a Server Component render — safe to ignore when
-          // middleware/proxy refreshes sessions; our login action sets cookies
-          // from a server action, where mutation is allowed.
+          // the proxy refreshes or opens the session. Server actions (saving
+          // a name, signing out to start fresh) set cookies where mutation is allowed.
         }
       },
     },

@@ -145,20 +145,27 @@ async function main(): Promise<void> {
       .eq('user_id', userA);
     check('cross-user pick delete rejected (A’s pick survives)', (afterTheft.count ?? 0) >= 1);
 
-    // ── R2.4: locked meeting rejects picks at the DATABASE level, not just UI ──
+    // ── Lock is not a gate. Settled is. Requires the picks-open migration. ──
     const lock = await clientA.from('meetings').update({ status: 'locked' }).eq('id', meeting.data!.id);
-    check('member can lock the meeting', lock.error === null);
+    check('member can store status locked (legacy rows)', lock.error === null);
     const latePick = await clientA
       .from('picks')
       .insert({ leg_id: leg1.id, user_id: userA, runner_id: runnerId(12) });
-    check('insert into LOCKED meeting rejected by database', latePick.error !== null);
+    check('insert into a locked meeting is accepted', latePick.error === null, latePick.error?.message);
+
+    const settle = await admin.from('meetings').update({ status: 'settled' }).eq('id', meeting.data!.id);
+    check('service role can settle the meeting', settle.error === null);
+    const afterSettle = await clientA
+      .from('picks')
+      .insert({ leg_id: leg1.id, user_id: userA, runner_id: runnerId(9) });
+    check('insert into a SETTLED meeting rejected by database', afterSettle.error !== null);
 
     await clientA.from('picks').delete().eq('user_id', userA);
     const stillThere = await admin
       .from('picks')
       .select('*', { count: 'exact', head: true })
       .eq('user_id', userA);
-    check('delete from LOCKED meeting also rejected (pick survives)', (stillThere.count ?? 0) >= 1);
+    check('delete from a SETTLED meeting rejected (picks survive)', (stillThere.count ?? 0) >= 1);
 
     // ── no delete path for meetings, even for their creator ──
     await admin.from('meetings').update({ status: 'open' }).eq('id', meeting.data!.id);

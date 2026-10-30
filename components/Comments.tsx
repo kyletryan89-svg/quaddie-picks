@@ -4,6 +4,7 @@
 // a list of messages and a box to post one.
 
 import { useEffect, useRef, useState } from 'react';
+import { hasDisplayName, NAME_REQUIRED } from '@/lib/display-name';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 import { initialsOf } from '@/lib/format';
 import type { Comment } from '@/lib/types';
@@ -80,6 +81,11 @@ export function Comments({ meetingId, currentUserId, initialComments, names }: P
   async function post(): Promise<void> {
     const text = body.trim();
     if (text === '' || posting) return;
+    if (!hasDisplayName(names, currentUserId)) {
+      setError(NAME_REQUIRED);
+      document.getElementById('your-name')?.focus();
+      return;
+    }
     setPosting(true);
     setError(undefined);
     const supabase = getSupabaseBrowserClient();

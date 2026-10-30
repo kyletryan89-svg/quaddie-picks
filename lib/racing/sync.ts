@@ -429,7 +429,11 @@ export async function syncResults(
         (done ?? []).length === 4 &&
         (done ?? []).every((l) => l.winner_number !== null || l.abandoned === true);
       if (complete) {
-        await db.from('meetings').update({ status: 'settled' }).eq('id', meetingId).eq('status', 'locked');
+        await db
+          .from('meetings')
+          .update({ status: 'settled' })
+          .eq('id', meetingId)
+          .in('status', ['open', 'locked']);
       }
 
       rowsTouched += n;

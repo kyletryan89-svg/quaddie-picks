@@ -2,8 +2,8 @@
 //
 // Run: BASE_URL=http://localhost:3000 npm run test:m11
 //
-// Covers: rename (WST), unlock-for-late-scratchings (+ RLS after a lock/unlock
-// cycle), first/second picks, per-leg comments, and the group chat board
+// Covers: rename (WST), picks staying open (including a stored 'locked' row)
+// until settled, first/second picks, per-leg comments, and the group chat board
 // (including the anonymous user_id omission). Drives two real browsers plus
 // service-role and member-session clients for database truth. Cleans up after.
 
@@ -22,25 +22,25 @@ function check(name: string, ok: boolean, detail?: string): void {
 function requireEnv(key: string): string {
   const raw = process.env[key];
   if (raw === undefined || raw === '') {
-    console.error(`Missing env var ${key}. Usage: BASE_URL=… GROUP_PASSCODE=… npm run test:m11`);
+    console.error(`Missing env var ${key}. Usage: BASE_URL=… npm run test:m11`);
     process.exit(2);
   }
   return raw;
 }
 
-async function login(page: import('puppeteer').Page, base: string, name: string, passcode: string): Promise<void> {
-  await page.goto(`${base}/login`, { waitUntil: 'networkidle0' });
+async function login(page: import('puppeteer').Page, base: string, name: string): Promise<void> {
+  await page.goto(`${base}/`, { waitUntil: 'networkidle0' });
+  await page.waitForSelector('input[name="displayName"]', { timeout: 15000 });
+  await page.click('input[name="displayName"]');
   await page.type('input[name="displayName"]', name);
-  await page.type('input[name="passcode"]', passcode);
   await Promise.all([
-    page.waitForNavigation({ waitUntil: 'networkidle0' }).catch(() => undefined),
-    page.click('button[type="submit"]'),
+    page.waitForFunction((expected) => document.body.innerText.includes(expected), { timeout: 15000 }, name),
+    page.click('button[data-testid="save-name"]'),
   ]);
 }
 
 async function main(): Promise<void> {
   const base = requireEnv('BASE_URL').replace(/\/+$/, '');
-  const passcode = requireEnv('GROUP_PASSCODE');
   const url = requireEnv('NEXT_PUBLIC_SUPABASE_URL');
   const anonKey = requireEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY');
   const serviceKey = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
@@ -98,7 +98,7 @@ async function main(): Promise<void> {
       );
   }
 
-  // ── Fixture: RLS meeting for the lock/unlock cycle ─────────────────────────
+  // ── Fixture: RLS meeting for open / locked / settled pick rules ────────────
   {
     const m = await admin
       .from('meetings')
@@ -116,6 +116,7 @@ async function main(): Promise<void> {
       .insert([
         { leg_id: rlsLeg1Id, runner_number: 1, runner_name: 'One' },
         { leg_id: rlsLeg1Id, runner_number: 2, runner_name: 'Two' },
+        { leg_id: rlsLeg1Id, runner_number: 3, runner_name: 'Three' },
       ]);
   }
 
@@ -132,7 +133,7 @@ async function main(): Promise<void> {
 
   const browser = await puppeteer.launch({ headless: true });
   try {
-    // ══ RLS: pick insert/delete while open, blocked while locked, ok after unlock ══
+    // ══ RLS: picks allowed while open or locked, blocked once settled ═════════
     {
       const clientC = createClient(url, anonKey);
       const { data: sess } = await clientC.auth.signInAnonymously();
@@ -141,25 +142,26 @@ async function main(): Promise<void> {
 
       const rid1 = await runnerIdIn(rlsMeetingId!, 1);
       const rid2 = await runnerIdIn(rlsMeetingId!, 2);
+      const rid3 = await runnerIdIn(rlsMeetingId!, 3);
 
       const openInsert = await clientC.from('picks').insert({ leg_id: rlsLeg1Id!, user_id: userC, runner_id: rid1 });
       check('pick insert accepted while OPEN (baseline)', openInsert.error === null, openInsert.error?.message);
 
       await clientC.from('meetings').update({ status: 'locked' }).eq('id', rlsMeetingId!);
       const lockedInsert = await clientC.from('picks').insert({ leg_id: rlsLeg1Id!, user_id: userC, runner_id: rid2 });
-      check('pick insert rejected while LOCKED (database)', lockedInsert.error !== null);
+      check('pick insert accepted while status is locked', lockedInsert.error === null, lockedInsert.error?.message);
 
-      // Unlock: any member sets it back to open (mirrors the unlock action).
-      await clientC
-        .from('meetings')
-        .update({ status: 'open', reopened_by: userC, reopened_at: new Date().toISOString() })
-        .eq('id', rlsMeetingId!);
-      const afterUnlockInsert = await clientC.from('picks').insert({ leg_id: rlsLeg1Id!, user_id: userC, runner_id: rid2 });
-      check('pick insert accepted again after UNLOCK (RLS still holds)', afterUnlockInsert.error === null, afterUnlockInsert.error?.message);
+      await admin.from('meetings').update({ status: 'settled' }).eq('id', rlsMeetingId!);
+      const settledInsert = await clientC.from('picks').insert({ leg_id: rlsLeg1Id!, user_id: userC, runner_id: rid3 });
+      check('pick insert rejected once settled', settledInsert.error !== null);
 
-      const del = await clientC.from('picks').delete().eq('user_id', userC).eq('leg_id', rlsLeg1Id!);
+      const beforeDelete = await admin.from('picks').select('*', { count: 'exact', head: true }).eq('user_id', userC);
+      await clientC.from('picks').delete().eq('user_id', userC).eq('leg_id', rlsLeg1Id!);
       const remaining = await admin.from('picks').select('*', { count: 'exact', head: true }).eq('user_id', userC);
-      check('pick delete accepted while OPEN after unlock', del.error === null && (remaining.count ?? 0) === 0);
+      check(
+        'pick delete rejected once settled',
+        (remaining.count ?? 0) === (beforeDelete.count ?? 0) && (remaining.count ?? 0) > 0,
+      );
 
       await admin.from('picks').delete().eq('user_id', userC);
       await admin.from('profiles').delete().eq('id', userC);
@@ -174,13 +176,13 @@ async function main(): Promise<void> {
     await pageA.setViewport({ width: 390, height: 844 });
     await pageB.setViewport({ width: 390, height: 844 });
 
-    // Rename checks (before signing in).
-    await pageA.goto(`${base}/login`, { waitUntil: 'networkidle0' });
-    const loginText = await pageA.evaluate(() => document.body.innerText);
-    check('login heading shows WST (not Quaddie Picks)', /\bWST\b/.test(loginText) && !loginText.includes('Quaddie'));
+    // The app opens straight onto the meetings list. No passcode screen.
+    await pageA.goto(`${base}/`, { waitUntil: 'networkidle0' });
+    const homeText = await pageA.evaluate(() => document.body.innerText);
+    check('home shows WST and no passcode', /\bWST\b/.test(homeText) && !/passcode/i.test(homeText));
     check('document title is WST', (await pageA.title()) === 'WST');
 
-    await login(pageA, base, nameA, passcode);
+    await login(pageA, base, nameA);
     const header = await pageA.evaluate(() => document.body.innerText);
     check('app header brand shows WST', header.includes('WST') && !header.includes('QuaddiePicks'));
 
@@ -248,7 +250,7 @@ async function main(): Promise<void> {
     }
 
     // Per-leg comment: A posts; B (other session) sees it live.
-    await login(pageB, base, nameB, passcode);
+    await login(pageB, base, nameB);
     await pageB.goto(`${base}/meetings/${uiMeetingId}`, { waitUntil: 'networkidle0' });
     await pageB.waitForSelector('main section h2', { timeout: 30000 });
     const rowsB = await admin.from('profiles').select('id').eq('display_name', nameB);
@@ -266,27 +268,22 @@ async function main(): Promise<void> {
       check('leg comment persisted with author', data.some((c) => c.body === commentText && c.user_id === userA), JSON.stringify(data));
     }
 
-    // Unlock UI: A locks, then edits picks (reopens).
-    await pageA.click('button::-p-text(Lock picks)');
-    await pageA.waitForSelector('button::-p-text(Edit picks)', { timeout: 10000 });
-    const lockedDb = await admin.from('meetings').select('status').eq('id', uiMeetingId!).single();
-    check('locking sets status to locked', lockedDb.data?.status === 'locked');
-
-    await pageA.click('button::-p-text(Edit picks)');
-    await pageA.waitForFunction(() => document.body.innerText.includes('Reopened by'), { timeout: 10000 });
-    const reopenedText = await pageA.evaluate(() => document.body.innerText);
-    check(
-      'reopened note shows who and when',
-      new RegExp(`Reopened by ${nameA}, \\d{1,2}:\\d{2}(am|pm)`).test(reopenedText),
-      reopenedText.split('\n').find((l) => l.includes('Reopened by')),
+    const hasLockButton = await pageA.evaluate(() =>
+      [...document.querySelectorAll('button')].some((b) => /lock picks|edit picks/i.test(b.textContent ?? '')),
     );
-    const openDb = await admin.from('meetings').select('status').eq('id', uiMeetingId!).single();
-    check('meeting returned to open after unlock', openDb.data?.status === 'open');
+    check('no lock or edit-picks button', !hasLockButton);
+    const settleLink = await pageA.$('a[href$="/settle"]');
+    check('enter results is available without locking', settleLink !== null);
 
-    // After unlock, A can pick again (RLS + UI both open).
+    // A row still stored as locked must pick and must not say picks are locked.
+    await admin.from('meetings').update({ status: 'locked' }).eq('id', uiMeetingId!);
+    await pageA.reload({ waitUntil: 'networkidle0' });
+    await pageA.waitForSelector('button[aria-label="Pick 4 Delta"]', { timeout: 15000 });
+    const lockedText = await pageA.evaluate(() => document.body.innerText);
+    check('a locked row is not described as locked', !/picks are locked/i.test(lockedText) && !/\bLOCKED\b/.test(lockedText));
     await pageA.click('button[aria-label="Pick 4 Delta"]');
     await pageA.waitForFunction(() => document.querySelector('[data-testid="picked-count"]')?.textContent?.includes('4'), { timeout: 10000 });
-    check('picking works again after unlock', true);
+    check('picking works while the row is stored as locked', true);
 
     // ══ Chat board ════════════════════════════════════════════════════════════
     // Desktop: side column visible without a toggle.

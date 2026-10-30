@@ -6,8 +6,7 @@
 // never a replacement.
 
 import { revalidatePath } from 'next/cache';
-import { redirect } from 'next/navigation';
-import { getAuthContext } from '@/lib/auth';
+import { getViewer } from '@/lib/auth';
 import { syncMeeting } from '@/lib/feed';
 import { ladbrokes } from '@/lib/racing/providers/ladbrokes';
 import { syncMeetingFieldById } from '@/lib/racing/sync';
@@ -39,8 +38,8 @@ async function writeLog(
 }
 
 export async function syncMeetingNow(meetingId: string): Promise<SyncNowResult> {
-  const auth = await getAuthContext();
-  if (auth === null) redirect('/login');
+  const auth = await getViewer();
+  if (auth === null) return { error: 'Could not open a session. Refresh and try again.' };
 
   const supabase = await createSupabaseServerClient();
   const { data: meeting } = await supabase
