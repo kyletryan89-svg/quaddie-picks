@@ -3,7 +3,7 @@ import { Suspense } from 'react';
 import { ChatBoard } from '@/components/ChatBoard';
 import { ErrorNote, ListSkeleton } from '@/components/ErrorNote';
 import { StatusBadge } from '@/components/StatusBadge';
-import { requireProfile } from '@/lib/auth';
+import { getViewer } from '@/lib/auth';
 import { formatDate } from '@/lib/format';
 import { targetSaturdayISO } from '@/lib/racing/dates';
 import { ladbrokes } from '@/lib/racing/providers/ladbrokes';
@@ -29,7 +29,8 @@ function orderMeetings(a: MeetingSummary, b: MeetingSummary): number {
 }
 
 export default async function MeetingsPage() {
-  const { userId } = await requireProfile();
+  const viewer = await getViewer();
+  const userId = viewer?.userId ?? '';
   const profiles = await getProfiles();
   const names: Record<string, string> = {};
   for (const p of profiles) names[p.id] = p.display_name;

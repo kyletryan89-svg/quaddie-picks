@@ -23,7 +23,7 @@ export async function setDisplayName(_prev: NameState, formData: FormData): Prom
     data: { user },
   } = await supabase.auth.getUser();
   if (user === null) {
-    return { error: 'Could not open a session. Refresh and try again.' };
+    return { error: 'Still connecting. Try again in a moment.' };
   }
 
   const { error } = await supabase.from('profiles').upsert({ id: user.id, display_name: parsed.name });

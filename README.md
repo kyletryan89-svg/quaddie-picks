@@ -44,8 +44,10 @@ Copy `.env.example` → `.env.local` and fill these in before anything else.
    supabase link --project-ref <project-ref>
    ```
 2. **Auth settings** (Supabase dashboard → Authentication): enable **Anonymous
-   sign-ins**. The app opens an anonymous session for every visitor and asks
-   for a display name in the header. No passcode, no emails, no redirects.
+   sign-ins**. The browser opens that session (the visitor's IP, not the
+   server's). A display name is saved from the header. No passcode. Apply
+   `supabase/migrations/20261030010000_anon_read.sql` so the cards are readable
+   before the session exists.
 3. **Database schema**
    ```bash
    supabase db push          # applies supabase/migrations/*.sql (tables + RLS + realtime)

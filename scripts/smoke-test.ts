@@ -43,7 +43,13 @@ async function main(): Promise<void> {
   {
     const res = await fetch(`${base}/`);
     const body = await res.text();
-    const ok = res.status === 200 && body.includes('WST') && !/passcode/i.test(body) && !body.includes('name="passcode"');
+    const ok =
+      res.status === 200 &&
+      body.includes('WST') &&
+      body.includes('Meetings') &&
+      !body.includes('Could not open a session') &&
+      !/passcode/i.test(body) &&
+      !body.includes('name="passcode"');
     checks.push({ name: 'GET / renders the app with no passcode field', ok, detail: String(res.status) });
   }
 

@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation';
 import { Suspense } from 'react';
 import { ListSkeleton } from '@/components/ErrorNote';
-import { requireProfile } from '@/lib/auth';
+import { getViewer } from '@/lib/auth';
 import { syncMeeting } from '@/lib/feed';
 import { getComments, getLatestSyncError, getMeetingBundle } from '@/lib/queries';
 import { MeetingScreen } from './MeetingScreen';
@@ -10,7 +10,8 @@ export const dynamic = 'force-dynamic';
 
 export default async function MeetingPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { userId } = await requireProfile();
+  const viewer = await getViewer();
+  const userId = viewer?.userId ?? '';
 
   return (
     <Suspense fallback={<ListSkeleton />}>
