@@ -32,6 +32,14 @@ describe('passcode gate removed', () => {
     expect(hits).toEqual([]);
   });
 
+  it('does not sign in anonymously on the server, and a missing session is not a wall', () => {
+    const proxy = readFileSync(path.join(root, 'proxy.ts'), 'utf8');
+    const layout = readFileSync(path.join(root, 'app/(app)/layout.tsx'), 'utf8');
+    expect(proxy).not.toContain('signInAnonymously');
+    expect(layout).not.toContain('Could not open a session');
+    expect(layout).toContain('SessionBootstrap');
+  });
+
   it('still guards cron routes with CRON_SECRET', () => {
     for (const route of ['sync-fields', 'sync-results', 'sync-scratchings']) {
       const text = readFileSync(path.join(root, 'app/api/cron', route, 'route.ts'), 'utf8');

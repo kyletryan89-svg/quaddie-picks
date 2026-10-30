@@ -65,18 +65,12 @@ async function main(): Promise<void> {
   await clientB.auth.setSession(sessionB);
 
   try {
-    // ── R2.2: unauthenticated requests cannot read picks or meetings ──
+    // ── Reads are open to the anon key. Writes are not. ──
     {
-      const meetings = await stranger.from('meetings').select('*');
-      check(
-        'anon (no session) reads zero meetings',
-        meetings.error === null && (meetings.data ?? []).length === 0,
-      );
-      const picks = await stranger.from('picks').select('*');
-      check(
-        'anon (no session) reads zero picks',
-        picks.error === null && (picks.data ?? []).length === 0,
-      );
+      const meetings = await stranger.from('meetings').select('id');
+      check('anon (no session) can select meetings', meetings.error === null, meetings.error?.message);
+      const picks = await stranger.from('picks').select('id');
+      check('anon (no session) can select picks', picks.error === null, picks.error?.message);
       const sneakyInsert = await stranger
         .from('meetings')
         .insert({ track: `${tag}-sneak`, meeting_date: '2026-01-01' });
@@ -98,6 +92,14 @@ async function main(): Promise<void> {
       meeting.error === null,
       meeting.error !== null ? `db said: ${meeting.error.message}` : undefined,
     );
+    if (meeting.data !== null) {
+      const seen = await stranger.from('meetings').select('id').eq('id', meeting.data.id);
+      check(
+        'anon can read that meeting without a session',
+        seen.error === null && (seen.data ?? []).some((row) => row.id === meeting.data!.id),
+        seen.error?.message,
+      );
+    }
     if (meeting.data === null) throw new Error('cannot proceed without meeting');
 
     const legs = await clientA

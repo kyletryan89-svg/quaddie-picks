@@ -1,7 +1,7 @@
 // Server-side data fetching for pages. Tiny group, tiny data: we deliberately
 // fetch small tables whole and stitch them in memory rather than maintaining
-// views/RPCs. Callers run after the proxy has opened an anonymous session
-// (requireProfile() / getViewer()); RLS still requires that session.
+// views/RPCs. Reads work with the anon key when there is no session yet
+// (see the anon select policies). Writes still need the browser's session.
 
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import type { Season } from '@/lib/season';

@@ -39,7 +39,7 @@ async function writeLog(
 
 export async function syncMeetingNow(meetingId: string): Promise<SyncNowResult> {
   const auth = await getViewer();
-  if (auth === null) return { error: 'Could not open a session. Refresh and try again.' };
+  if (auth === null) return { error: 'Still connecting. Try again in a moment.' };
 
   const supabase = await createSupabaseServerClient();
   const { data: meeting } = await supabase

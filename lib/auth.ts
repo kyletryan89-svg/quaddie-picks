@@ -8,8 +8,9 @@ export interface Viewer {
 }
 
 /**
- * The signed-in member, if the proxy has already opened an anonymous session.
- * Never redirects. A missing profile is a normal first visit, not a logged-out user.
+ * The signed-in member, or null when this browser has no session yet.
+ * Null is read-only, not an error: pages still render, and the browser
+ * opens an anonymous session on the visitor's own IP.
  */
 export async function getViewer(): Promise<Viewer | null> {
   const supabase = await createSupabaseServerClient();
@@ -28,16 +29,4 @@ export async function getViewer(): Promise<Viewer | null> {
   }
 
   return { userId: user.id, profile: (profile as Profile | null) ?? null };
-}
-
-/**
- * Pages that need a user id. Throws (no redirect) when the session could not
- * be opened — the proxy should have signed the browser in anonymously.
- */
-export async function requireProfile(): Promise<Viewer> {
-  const viewer = await getViewer();
-  if (viewer === null) {
-    throw new Error('Could not open a session. Refresh and try again.');
-  }
-  return viewer;
 }

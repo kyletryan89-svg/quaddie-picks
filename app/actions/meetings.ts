@@ -29,7 +29,7 @@ export interface CreateMeetingState {
 
 export async function createMeeting(_prev: CreateMeetingState, formData: FormData): Promise<CreateMeetingState> {
   const auth = await getViewer();
-  if (auth === null) return { error: 'Could not open a session. Refresh and try again.' };
+  if (auth === null) return { error: 'Still connecting. Try again in a moment.' };
 
   const track = String(formData.get('track') ?? '').trim();
   const date = String(formData.get('date') ?? '').trim();
@@ -107,7 +107,7 @@ const FIELD_MAX = 99;
  */
 export async function settleMeeting(_prev: SettleState, formData: FormData): Promise<SettleState> {
   const auth = await getViewer();
-  if (auth === null) return { error: 'Could not open a session. Refresh and try again.' };
+  if (auth === null) return { error: 'Still connecting. Try again in a moment.' };
 
   const meetingId = String(formData.get('meetingId') ?? '');
 
