@@ -15,10 +15,9 @@ import type { MeetingStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
-// Order the list around what needs doing: locked cards (results waiting) first,
-// then upcoming open cards, then settled history. Within locked/open the soonest
-// date wins; settled shows most recent first.
-const STATUS_ORDER: Record<MeetingStatus, number> = { locked: 0, open: 1, settled: 2 };
+// Open cards (including leftover rows still stored as locked) first, soonest
+// date first. Settled history last, most recent first.
+const STATUS_ORDER: Record<MeetingStatus, number> = { locked: 1, open: 1, settled: 2 };
 
 function orderMeetings(a: MeetingSummary, b: MeetingSummary): number {
   const byStatus = STATUS_ORDER[a.meeting.status] - STATUS_ORDER[b.meeting.status];
@@ -105,9 +104,6 @@ async function MeetingsList() {
                 )}
               </span>
             </div>
-            {m.meeting.status === 'locked' && (
-              <div className="mt-1 text-xs font-medium text-amber-600">Results waiting — tap to enter</div>
-            )}
           </Link>
         </li>
       ))}

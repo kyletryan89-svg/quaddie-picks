@@ -23,8 +23,9 @@ async function SettleLoader({ meetingId }: { meetingId: string }) {
   if (bundle === null) {
     notFound();
   }
-  // Only a locked meeting can be settled (SPEC §6); anything else goes back.
-  if (bundle.meeting.status !== 'locked') {
+  // Open cards and leftover locked rows can both take results. Settled cards
+  // already have their numbers.
+  if (bundle.meeting.status === 'settled') {
     redirect(`/meetings/${meetingId}`);
   }
 

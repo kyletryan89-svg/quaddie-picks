@@ -1,56 +1,43 @@
-import { redirect } from 'next/navigation';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import type { Profile } from '@/lib/types';
 
-export interface AuthContext {
+export interface Viewer {
   userId: string;
-  profile: Profile;
+  /** Null until this browser saves a display name. The app still renders. */
+  profile: Profile | null;
 }
 
 /**
- * Server-side guard used by every protected page and action.
- *  - no Supabase session        → /login
- *  - session without a profile  → sign the orphan session out, back to /login
- *    (SPEC §4.5 — a browser with cookies but no profile row is not logged in)
+ * The signed-in member, if the proxy has already opened an anonymous session.
+ * Never redirects. A missing profile is a normal first visit, not a logged-out user.
  */
-export async function requireProfile(): Promise<AuthContext> {
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (user === null) {
-    redirect('/login');
-  }
-
-  const { data: profile, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', user.id)
-    .maybeSingle();
-
-  if (error !== null || profile === null) {
-    await supabase.auth.signOut();
-    redirect('/login');
-  }
-
-  return { userId: user.id, profile: profile as Profile };
-}
-
-/** Non-redirecting variant for server actions that need to report an error. */
-export async function getAuthContext(): Promise<AuthContext | null> {
+export async function getViewer(): Promise<Viewer | null> {
   const supabase = await createSupabaseServerClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (user === null) return null;
 
-  const { data: profile } = await supabase
+  const { data: profile, error } = await supabase
     .from('profiles')
     .select('*')
     .eq('id', user.id)
     .maybeSingle();
-  if (profile === null) return null;
+  if (error !== null) {
+    console.error('profile read failed:', error.message);
+  }
 
-  return { userId: user.id, profile: profile as Profile };
+  return { userId: user.id, profile: (profile as Profile | null) ?? null };
+}
+
+/**
+ * Pages that need a user id. Throws (no redirect) when the session could not
+ * be opened — the proxy should have signed the browser in anonymously.
+ */
+export async function requireProfile(): Promise<Viewer> {
+  const viewer = await getViewer();
+  if (viewer === null) {
+    throw new Error('Could not open a session. Refresh and try again.');
+  }
+  return viewer;
 }

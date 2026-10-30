@@ -1,14 +1,17 @@
 'use server';
 
-// Meeting lifecycle actions: create (+ its 4 legs), lock, settle. Feed meetings
-// are synced by lib/feed.ts; this file also lets a member create one by hand —
-// the only way to run a card the feed does not cover (e.g. Caulfield, VIC).
-// Every action re-checks auth server-side; RLS remains the real gate.
+// Meeting lifecycle actions: create (+ its 4 legs) and settle. There is no lock
+// step — picks stay open until results are in. Feed meetings are synced by
+// lib/feed.ts; this file also lets a member create one by hand — the only way
+// to run a card the feed does not cover (e.g. Caulfield, VIC). Every action
+// re-checks the session server-side; RLS remains the real gate.
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { getAuthContext } from '@/lib/auth';
+import { getViewer } from '@/lib/auth';
+import { isUnsettled } from '@/lib/meeting-status';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import type { MeetingStatus } from '@/lib/types';
 
 export interface CreateMeetingState {
   error?: string;
@@ -25,8 +28,8 @@ export interface CreateMeetingState {
 }
 
 export async function createMeeting(_prev: CreateMeetingState, formData: FormData): Promise<CreateMeetingState> {
-  const auth = await getAuthContext();
-  if (auth === null) redirect('/login');
+  const auth = await getViewer();
+  if (auth === null) return { error: 'Could not open a session. Refresh and try again.' };
 
   const track = String(formData.get('track') ?? '').trim();
   const date = String(formData.get('date') ?? '').trim();
@@ -37,6 +40,9 @@ export async function createMeeting(_prev: CreateMeetingState, formData: FormDat
     races: raceNumbers as [string, string, string, string],
   };
 
+  if (auth.profile === null) {
+    return { error: 'Add your name at the top first.', values };
+  }
   if (track.length < 2 || track.length > 60) {
     return { error: 'Track name must be 2–60 characters.', values };
   }
@@ -73,50 +79,6 @@ export async function createMeeting(_prev: CreateMeetingState, formData: FormDat
   redirect(`/meetings/${meeting.id}`);
 }
 
-export async function lockMeeting(meetingId: string): Promise<{ error?: string }> {
-  const auth = await getAuthContext();
-  if (auth === null) redirect('/login');
-
-  const supabase = await createSupabaseServerClient();
-  // Guard against locking an already-settled meeting; RLS still enforces the rest.
-  const { error } = await supabase
-    .from('meetings')
-    .update({ status: 'locked' })
-    .eq('id', meetingId)
-    .eq('status', 'open');
-
-  if (error !== null) {
-    return { error: error.message };
-  }
-  revalidatePath(`/meetings/${meetingId}`);
-  revalidatePath('/');
-  return {};
-}
-
-/**
- * Reopen a locked meeting so members can change picks for late scratchings.
- * Any member may do this; it is impossible once the meeting is settled. The
- * unlocker and timestamp are recorded so the screen can show who did it.
- */
-export async function unlockMeeting(meetingId: string): Promise<{ error?: string }> {
-  const auth = await getAuthContext();
-  if (auth === null) redirect('/login');
-
-  const supabase = await createSupabaseServerClient();
-  const { error } = await supabase
-    .from('meetings')
-    .update({ status: 'open', reopened_by: auth.userId, reopened_at: new Date().toISOString() })
-    .eq('id', meetingId)
-    .eq('status', 'locked');
-
-  if (error !== null) {
-    return { error: error.message };
-  }
-  revalidatePath(`/meetings/${meetingId}`);
-  revalidatePath('/');
-  return {};
-}
-
 export interface SettleState {
   error?: string;
   /** Echoed back so a rejected settle does not wipe the form (see CreateMeetingState). */
@@ -144,8 +106,8 @@ const FIELD_MAX = 99;
  * typed, never converted to odds-to-one anywhere.
  */
 export async function settleMeeting(_prev: SettleState, formData: FormData): Promise<SettleState> {
-  const auth = await getAuthContext();
-  if (auth === null) redirect('/login');
+  const auth = await getViewer();
+  if (auth === null) return { error: 'Could not open a session. Refresh and try again.' };
 
   const meetingId = String(formData.get('meetingId') ?? '');
 
@@ -165,8 +127,8 @@ export async function settleMeeting(_prev: SettleState, formData: FormData): Pro
   const supabase = await createSupabaseServerClient();
   const { data: meeting } = await supabase.from('meetings').select('status').eq('id', meetingId).maybeSingle();
   if (meeting === null) return { error: 'Meeting not found.', values };
-  if (meeting.status !== 'locked') {
-    return { error: 'Only a locked meeting can be settled.', values };
+  if (!isUnsettled(meeting.status as MeetingStatus)) {
+    return { error: 'This meeting is already settled.', values };
   }
 
   interface WinnerInput {
@@ -250,13 +212,17 @@ export async function settleMeeting(_prev: SettleState, formData: FormData): Pro
     }
   }
 
-  const { error: statusError } = await supabase
+  const { data: settled, error: statusError } = await supabase
     .from('meetings')
     .update({ status: 'settled' })
     .eq('id', meetingId)
-    .eq('status', 'locked');
+    .in('status', ['open', 'locked'])
+    .select('id');
   if (statusError !== null) {
     return { error: `Winners saved but status change failed: ${statusError.message}`, values };
+  }
+  if (settled === null || settled.length === 0) {
+    return { error: 'This meeting is already settled.', values };
   }
 
   revalidatePath(`/meetings/${meetingId}`);

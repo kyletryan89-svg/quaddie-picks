@@ -2,7 +2,7 @@
 //
 // Run: BASE_URL=http://localhost:3000 npm run test:e2e
 //
-// Two real browsers (separate anonymous sessions) log in, land on the live
+// Two real browsers (separate anonymous sessions) set a name, land on the live
 // Saturday-metro list, open the same meeting, pick runners, watch each other's
 // picks arrive over realtime, and chat in the comment box. Cleans up after.
 
@@ -21,25 +21,25 @@ function check(name: string, ok: boolean, detail?: string): void {
 function requireEnv(key: string): string {
   const raw = process.env[key];
   if (raw === undefined || raw === '') {
-    console.error(`Missing env var ${key}. Usage: BASE_URL=… GROUP_PASSCODE=… npm run test:e2e`);
+    console.error(`Missing env var ${key}. Usage: BASE_URL=… npm run test:e2e`);
     process.exit(2);
   }
   return raw;
 }
 
-async function login(page: import('puppeteer').Page, base: string, name: string, passcode: string): Promise<void> {
-  await page.goto(`${base}/login`, { waitUntil: 'networkidle0' });
+async function login(page: import('puppeteer').Page, base: string, name: string): Promise<void> {
+  await page.goto(`${base}/`, { waitUntil: 'networkidle0' });
+  await page.waitForSelector('input[name="displayName"]', { timeout: 15000 });
+  await page.click('input[name="displayName"]');
   await page.type('input[name="displayName"]', name);
-  await page.type('input[name="passcode"]', passcode);
   await Promise.all([
-    page.waitForNavigation({ waitUntil: 'networkidle0' }).catch(() => undefined),
-    page.click('button[type="submit"]'),
+    page.waitForFunction((expected) => document.body.innerText.includes(expected), { timeout: 15000 }, name),
+    page.click('button[data-testid="save-name"]'),
   ]);
 }
 
 async function main(): Promise<void> {
   const base = requireEnv('BASE_URL').replace(/\/+$/, '');
-  const passcode = requireEnv('GROUP_PASSCODE');
   const url = requireEnv('NEXT_PUBLIC_SUPABASE_URL');
   const anonKey = requireEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY');
   const serviceKey = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
@@ -72,7 +72,7 @@ async function main(): Promise<void> {
     await pageA.setViewport({ width: 390, height: 844 });
     await pageB.setViewport({ width: 390, height: 844 });
 
-    await login(pageA, base, nameA, passcode);
+    await login(pageA, base, nameA);
     check('A lands on the meetings list', new URL(pageA.url()).pathname === '/');
 
     // The list syncs the live feed server-side before streaming, so give it time.
@@ -121,7 +121,7 @@ async function main(): Promise<void> {
     check('tapping a runner increments the pick count', !after.includes('0') && after !== before, `${before} → ${after}`);
 
     // B opens the same meeting and sees A's pick arrive live (no reload).
-    await login(pageB, base, nameB, passcode);
+    await login(pageB, base, nameB);
     const pageBOnList = new URL(pageB.url()).pathname === '/';
     check('B lands on the meetings list', pageBOnList);
 

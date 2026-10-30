@@ -3,7 +3,7 @@
 Private app for a small NSW crew who play the quaddie. Each Saturday the app pulls the
 metropolitan meetings straight from the Racing NSW form guide; you pick a meeting, see
 the quaddie (always the last four races), tap your runners, and watch everyone else's
-picks appear live. Picks lock before the jump, someone types in the four winners +
+picks appear live. Someone types in the four winners +
 starting prices, and the app scores every member leg by leg and keeps the season
 leaderboard. A comment box sits under the card. Scoring is individual legs only —
 **no tickets, no dividends, no payouts**; the real bet is settled privately between members.
@@ -29,8 +29,8 @@ Realtime, RLS on) · Vitest · Vercel (`syd1`).
 |----------|----------------|------------|
 | `NEXT_PUBLIC_SUPABASE_URL` | `.env.local`, Vercel | Your Supabase project URL, e.g. `https://abcdefgh.supabase.co`. Public by design. |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | `.env.local`, Vercel | Supabase anon/public key. Public by design — RLS is the security boundary. |
-| `GROUP_PASSCODE` | `.env.local`, Vercel (**server-only**) | The group passcode checked inside a server action. Never prefixed `NEXT_PUBLIC_`; never referenced from client code. |
-| `SUPABASE_SERVICE_ROLE_KEY` | `.env.local` only — **not** needed on Vercel | Bypasses RLS. Used exclusively by `npm run seed` and `npm run test:security` cleanup. Never import it from app code. |
+| `SUPABASE_SERVICE_ROLE_KEY` | `.env.local`, and Vercel for cron | Bypasses RLS. Used by `npm run seed`, `npm run test:security` cleanup, and the cron routes. Never import it from a client component. |
+| `CRON_SECRET` | `.env.local`, Vercel (**server-only**) | Bearer token for `/api/cron/*`. This is server-to-server, not a user login. |
 
 Copy `.env.example` → `.env.local` and fill these in before anything else.
 
@@ -44,14 +44,16 @@ Copy `.env.example` → `.env.local` and fill these in before anything else.
    supabase link --project-ref <project-ref>
    ```
 2. **Auth settings** (Supabase dashboard → Authentication): enable **Anonymous
-   sign-ins**. Nothing else to configure — no emails, no redirects.
+   sign-ins**. The app opens an anonymous session for every visitor and asks
+   for a display name in the header. No passcode, no emails, no redirects.
 3. **Database schema**
    ```bash
    supabase db push          # applies supabase/migrations/*.sql (tables + RLS + realtime)
    ```
 4. **Env vars in Vercel** (Project → Settings → Environment Variables): add
-   `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `GROUP_PASSCODE`.
-   Do **not** add `SUPABASE_SERVICE_ROLE_KEY` to Vercel.
+   `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `CRON_SECRET`,
+   and `SUPABASE_SERVICE_ROLE_KEY` (the cron routes need the service role).
+   `GROUP_PASSCODE` is unused and can be deleted.
 5. **Deploy**
    ```bash
    vercel link
@@ -71,7 +73,7 @@ Copy `.env.example` → `.env.local` and fill these in before anything else.
 | `npm run build` | Production build |
 | `npm run verify` | typecheck + lint + unit tests (the pre-commit gate) |
 | `npm run test:security` | RLS integration tests against the live database |
-| `npm run test:auth` | Login flow tests against a running server |
+| `npm run test:auth` | Name-only identity checks against a running server |
 | `npm run test:e2e` | Feed-driven flow (list → quaddie → picks → comments) against a running server |
 | `npm run seed` | Create the 5 member profiles |
 | `npm run smoke` | Smoke-test a deployed URL (pass `BASE_URL=https://…`) |

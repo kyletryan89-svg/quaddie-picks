@@ -19,8 +19,9 @@ export interface Meeting {
   source_key: string | null;
   created_by: string | null;
   created_at: string;
-  /** Who last reopened a locked meeting, and when (null until then). */
+  /** Unused. Kept so a `select *` still matches the column. The app no longer writes it. */
   reopened_by: string | null;
+  /** Unused. Kept so a `select *` still matches the column. The app no longer writes it. */
   reopened_at: string | null;
 }
 

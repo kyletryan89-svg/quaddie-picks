@@ -1,9 +1,9 @@
-// Smoke test against a deployed URL — rubric R7.
+// Smoke test against a deployed URL.
 //
 // Run: BASE_URL=https://your-preview.vercel.app npm run smoke
 //
-// Checks the public behaviour surface: unauthenticated users are redirected to
-// /login from every protected route, and /login itself serves the form.
+// The app is open: pages render with no passcode and no redirect to /login.
+// Cron routes stay behind CRON_SECRET.
 
 import { loadEnvLocal } from './load-env';
 
@@ -33,32 +33,34 @@ async function main(): Promise<void> {
     return fetch(`${base}${path}`, { redirect: 'manual' });
   }
 
-  // 1. Unauthenticated / redirects to /login (any 3xx whose Location points there)
-  {
-    const res = await get('/');
-    const loc = res.headers.get('location') ?? '';
-    const ok = res.status >= 300 && res.status < 400 && loc.includes('/login');
-    checks.push({ name: 'GET / redirects unauthenticated visitor to /login', ok, detail: `${res.status} → ${loc}` });
-  }
-
-  // 2. Same for /meetings/[id] and /leaderboard
-  for (const path of [`/meetings/${fakeMeetingId}`, '/leaderboard']) {
+  for (const path of ['/', `/meetings/${fakeMeetingId}`, '/leaderboard']) {
     const res = await get(path);
     const loc = res.headers.get('location') ?? '';
-    const ok = res.status >= 300 && res.status < 400 && loc.includes('/login');
-    checks.push({ name: `GET ${path} redirects to /login`, ok, detail: `${res.status} → ${loc}` });
+    const ok = res.status < 400 && !loc.includes('/login');
+    checks.push({ name: `GET ${path} is open (no login redirect)`, ok, detail: `${res.status} → ${loc || 'no redirect'}` });
   }
 
-  // 3. /login renders the form
   {
-    const res = await fetch(`${base}/login`);
+    const res = await fetch(`${base}/`);
     const body = await res.text();
-    const ok =
-      res.status === 200 &&
-      body.toLowerCase().includes('name') &&
-      body.toLowerCase().includes('passcode') &&
-      body.includes('WST');
-    checks.push({ name: 'GET /login renders the login form', ok, detail: String(res.status) });
+    const ok = res.status === 200 && body.includes('WST') && !/passcode/i.test(body) && !body.includes('name="passcode"');
+    checks.push({ name: 'GET / renders the app with no passcode field', ok, detail: String(res.status) });
+  }
+
+  {
+    const res = await fetch(`${base}/login`, { redirect: 'manual' });
+    const loc = res.headers.get('location') ?? '';
+    const ok = res.status === 404 && !loc.includes('/login');
+    checks.push({ name: 'GET /login is gone', ok, detail: `${res.status} → ${loc || 'no redirect'}` });
+  }
+
+  {
+    const res = await fetch(`${base}/api/cron/sync-fields`);
+    checks.push({
+      name: 'GET /api/cron/sync-fields without CRON_SECRET is 401',
+      ok: res.status === 401,
+      detail: String(res.status),
+    });
   }
 
   let failed = 0;

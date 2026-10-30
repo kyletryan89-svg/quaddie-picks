@@ -4,20 +4,21 @@
 // the real field from the Racing NSW form guide — a tappable list of runners
 // with jockey, weight, barrier and form — plus the initials of every member who
 // has taken each one, first/second-pick badges, and a per-leg comment thread.
-// A locked meeting can be reopened for late scratchings. Nothing else.
+// Picks stay editable until the meeting is settled. A stored status of locked
+// is treated as open. Nothing else.
 
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { lockMeeting, unlockMeeting } from '@/app/actions/meetings';
 import { syncMeetingNow } from '@/app/actions/sync';
 import { ChatBoard } from '@/components/ChatBoard';
 import { Comments } from '@/components/Comments';
-import { ErrorNote } from '@/components/ErrorNote';
 import { LegComments } from '@/components/LegComments';
 import { StatusBadge } from '@/components/StatusBadge';
 import { ResultsTable } from '@/components/ResultsTable';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
+import { hasDisplayName, NAME_REQUIRED } from '@/lib/display-name';
+import { isUnsettled } from '@/lib/meeting-status';
 import { parseField, type ParsedRunner } from '@/lib/field-parse';
 import { formatDate, initialsOf, money } from '@/lib/format';
 import { toScoringLegs, toScoringPicks } from '@/lib/meeting-score';
@@ -68,33 +69,32 @@ export function MeetingScreen({
   const [runners, setRunners] = useState<Runner[]>(initialRunners);
   const [picks, setPicks] = useState<Pick[]>(initialPicks);
   const [names, setNames] = useState<Record<string, string>>(initialNames);
+  const [namesFromServer, setNamesFromServer] = useState(initialNames);
+  if (initialNames !== namesFromServer) {
+    setNamesFromServer(initialNames);
+    setNames((prev) => ({ ...prev, ...initialNames }));
+  }
   const [live, setLive] = useState(false);
   const [legErrors, setLegErrors] = useState<Record<number, string>>({});
-  const [lockError, setLockError] = useState<string | undefined>(undefined);
-  const [locking, setLocking] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | undefined>(undefined);
   const [status, setStatus] = useState(meeting.status);
-  const [reopenedBy, setReopenedBy] = useState<string | null>(meeting.reopened_by ?? null);
-  const [reopenedAt, setReopenedAt] = useState<string | null>(meeting.reopened_at ?? null);
 
   const statusRef = useRef(status);
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
 
-  // Adopt a meeting the SERVER reports (after router.refresh() following a lock,
-  // unlock or settle), using React's adjust-state-during-render pattern.
+  // Adopt a meeting the SERVER reports (after router.refresh() following a
+  // settle), using React's adjust-state-during-render pattern.
   const [lastServerMeeting, setLastServerMeeting] = useState(meeting);
   if (meeting !== lastServerMeeting) {
     setLastServerMeeting(meeting);
     setStatus(meeting.status);
-    setReopenedBy(meeting.reopened_by ?? null);
-    setReopenedAt(meeting.reopened_at ?? null);
   }
 
   const router = useRouter();
-  const isOpen = status === 'open';
+  const isOpen = isUnsettled(status);
 
   const runnerIdsRef = useRef(new Set(initialRunners.map((r) => r.id)));
   useEffect(() => {
@@ -150,8 +150,6 @@ export function MeetingScreen({
               setStatus(next.status);
               if (next.status === 'settled') void router.refresh();
             }
-            if (next.reopened_by !== undefined) setReopenedBy(next.reopened_by);
-            if (next.reopened_at !== undefined) setReopenedAt(next.reopened_at);
           },
         )
         .subscribe((subStatus: string) => {
@@ -250,6 +248,11 @@ export function MeetingScreen({
   /** Tap a runner: take it if you have not, drop it if you have. */
   async function toggleRunner(leg: Leg, runner: Runner): Promise<void> {
     setLegError(leg.leg_number, '');
+    if (!hasDisplayName(names, currentUserId)) {
+      setLegError(leg.leg_number, NAME_REQUIRED);
+      document.getElementById('your-name')?.focus();
+      return;
+    }
     const supabase = getSupabaseBrowserClient();
     const mine = picks.find((p) => p.runner_id === runner.id && p.user_id === currentUserId);
 
@@ -326,30 +329,6 @@ export function MeetingScreen({
     );
   }
 
-  async function lock(): Promise<void> {
-    setLocking(true);
-    setLockError(undefined);
-    const res = await lockMeeting(meeting.id);
-    setLocking(false);
-    if (res.error !== undefined) {
-      setLockError(res.error);
-      return;
-    }
-    router.refresh();
-  }
-
-  async function unlock(): Promise<void> {
-    setLocking(true);
-    setLockError(undefined);
-    const res = await unlockMeeting(meeting.id);
-    setLocking(false);
-    if (res.error !== undefined) {
-      setLockError(res.error);
-      return;
-    }
-    router.refresh();
-  }
-
   /** Run the fields sync for this meeting on demand and report what it found. */
   async function syncNow(): Promise<void> {
     setSyncing(true);
@@ -363,11 +342,6 @@ export function MeetingScreen({
     setSyncResult(res.synced !== undefined ? `Synced ${res.synced} ${res.synced === 1 ? 'row' : 'rows'}` : 'Synced');
     router.refresh();
   }
-
-  const reopenedLabel =
-    reopenedAt !== null
-      ? new Date(reopenedAt).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' }).replace(' ', '').toLowerCase()
-      : '';
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -410,7 +384,7 @@ export function MeetingScreen({
       )}
 
       <p className="-mb-2 text-xs leading-relaxed text-slate-400">
-        Lock in your first pick, mark another as your 2nd or 3rd. Add a comment if you wish.
+        Mark your first pick, and another as your 2nd or 3rd. Add a comment if you wish.
       </p>
 
       {/* Plain count of horses taken — no money, no cost framing. */}
@@ -419,47 +393,17 @@ export function MeetingScreen({
           <strong>{myTotal}</strong> {myTotal === 1 ? 'horse' : 'horses'} picked
         </span>
         {isOpen && (
-          <button
-            type="button"
-            onClick={() => void lock()}
-            disabled={locking}
-            className="tap rounded-md bg-amber-500 px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-60"
+          <Link
+            href={`/meetings/${meeting.id}/settle`}
+            className="tap inline-flex items-center rounded-md bg-sky-600 px-2.5 py-1 text-xs font-semibold text-white"
           >
-            {locking ? 'Locking…' : 'Lock picks'}
-          </button>
-        )}
-        {status === 'locked' && (
-          <span className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void unlock()}
-              disabled={locking}
-              className="tap rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-60"
-            >
-              {locking ? 'Reopening…' : 'Edit picks'}
-            </button>
-            <Link
-              href={`/meetings/${meeting.id}/settle`}
-              className="tap inline-flex items-center rounded-md bg-sky-600 px-2.5 py-1 text-xs font-semibold text-white"
-            >
-              Enter results →
-            </Link>
-          </span>
+            Enter results
+          </Link>
         )}
       </div>
 
-      {lockError !== undefined && <ErrorNote message={lockError} />}
-
-      {isOpen && reopenedBy !== null && (
-        <p className="rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-600" data-testid="reopened-note">
-          Reopened by {names[reopenedBy] ?? 'Unknown'}, {reopenedLabel}
-        </p>
-      )}
-
       {!isOpen && (
-        <p className="rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-600">
-          {status === 'locked' ? 'Picks are locked. Waiting on results.' : 'Settled — final numbers below.'}
-        </p>
+        <p className="rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-600">Settled — final numbers below.</p>
       )}
 
       {[...legs]
