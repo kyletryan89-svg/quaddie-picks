@@ -6,7 +6,7 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { getViewer } from '@/lib/auth';
 import { formatDate } from '@/lib/format';
 import { comparePast, compareUpcoming, isOnOrAfter } from '@/lib/meeting-list';
-import { sydneyTodayISO, targetSaturdayISO } from '@/lib/racing/dates';
+import { sydneyTodayISO, syncWindowISO } from '@/lib/racing/dates';
 import { ladbrokes } from '@/lib/racing/providers/ladbrokes';
 import { syncMeetings } from '@/lib/racing/sync';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
@@ -80,7 +80,8 @@ async function MeetingsList() {
   try {
     try {
       const supabase = await createSupabaseServerClient();
-      await syncMeetings(supabase, ladbrokes, targetSaturdayISO());
+      const window = syncWindowISO();
+      await syncMeetings(supabase, ladbrokes, window.from, window.to);
     } catch {
       // Ingestion is best-effort; the list comes from the table regardless.
     }

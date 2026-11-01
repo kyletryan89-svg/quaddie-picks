@@ -1,0 +1,25 @@
+{
+  "data": {
+    "meetings": [
+      {
+        "meeting": "beae8996-e9e3-5f89-bf7c-78ae1119340d",
+        "name": "Flemington",
+        "date": "2026-11-03T00:00:00Z",
+        "category": "T",
+        "state": "VIC",
+        "races": [
+          { "id": "66c4f78a-6634-476f-9bc9-32a455fe5334", "race_number": 1, "name": "Darley Maribyrnong Plate (G3)", "start_time": "2026-11-02T23:45:00Z" },
+          { "id": "469f248a-f174-420f-b5ac-dbb677cbfd69", "race_number": 2, "name": "Pin & Win Community (Bm80) Hcp", "start_time": "2026-11-03T00:20:00Z" },
+          { "id": "3f099e98-ad2e-450a-b8fb-7bc13469d939", "race_number": 3, "name": "Tab One Pool Trophy (L)", "start_time": "2026-11-03T01:00:00Z" },
+          { "id": "6658e09e-0d95-4f99-9dff-5bc7e4cfe826", "race_number": 4, "name": "The Schweppervescence Plate", "start_time": "2026-11-03T01:40:00Z" },
+          { "id": "bc5523b7-a655-4ba1-98b9-f8bbec4e7fd7", "race_number": 5, "name": "Australian Heritage Cup", "start_time": "2026-11-03T02:20:00Z" },
+          { "id": "52d0cecc-06e2-485a-8bba-231a728f8d1d", "race_number": 6, "name": "Asahi Super Dry Plate (L)", "start_time": "2026-11-03T02:55:00Z" },
+          { "id": "0d0e7123-56f9-457a-8ea1-b17e60e4ebd4", "race_number": 7, "name": "Lexus Melbourne Cup (G1)", "start_time": "2026-11-03T04:00:00Z" },
+          { "id": "64eae346-0f49-427c-9402-0ceb85fcbfab", "race_number": 8, "name": "Crown Amanda Elliott (L)", "start_time": "2026-11-03T04:50:00Z" },
+          { "id": "4490b3dc-8d0d-4d7e-acbf-7e7c67d669d4", "race_number": 9, "name": "The Hong Kong Jockey Club Stakes (G3)", "start_time": "2026-11-03T05:35:00Z" },
+          { "id": "65ee73b7-9848-4020-a277-cfada471e173", "race_number": 10, "name": "Channel 9 Trophy (Bm90) Hcp", "start_time": "2026-11-03T06:15:00Z" }
+        ]
+      }
+    ]
+  }
+}

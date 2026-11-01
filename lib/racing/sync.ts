@@ -247,18 +247,19 @@ export async function syncFields(
 }
 
 /**
- * Create the meeting rows + quaddie legs for a Saturday without fetching the
- * runner fields. This is the meetings-list ingestion path (replacing the Racing
- * NSW feed): it makes a card appear as soon as the provider publishes it, and is
- * idempotent, so it is cheap to run on every list render. Runner fields still
- * arrive through the fields/scratchings crons and the per-meeting "Sync now".
+ * Create the meeting rows + quaddie legs (last four races) for every whitelisted
+ * metro meeting between two dates, without fetching runner fields. One feed
+ * request covers the range, so a Tuesday Flemington card is included alongside
+ * Saturday. Idempotent. Runner fields arrive from sync-fields, Sync now, or
+ * opening a Ladbrokes-sourced meeting.
  */
 export async function syncMeetings(
   db: SupabaseClient,
   provider: Provider,
-  date: string,
+  from: string,
+  to: string = from,
 ): Promise<number> {
-  const meetings = await metroMeetings(provider, date);
+  const meetings = (await provider.getMeetings(from, to)).filter((m) => isMetroTrack(m.track, m.state));
   let rows = 0;
   for (const m of meetings) {
     const meeting = await upsertMeeting(db, m);

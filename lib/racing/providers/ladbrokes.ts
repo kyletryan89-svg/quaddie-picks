@@ -220,9 +220,15 @@ export class LadbrokesProvider implements Provider {
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
-  async getSaturdayMeetings(date: string): Promise<ProviderMeeting[]> {
-    const json = await this.fetchJson(`/racing/meetings?category=T&country=AUS&date_from=${date}&date_to=${date}`);
+  async getMeetings(from: string, to: string): Promise<ProviderMeeting[]> {
+    const json = await this.fetchJson(
+      `/racing/meetings?category=T&country=AUS&date_from=${from}&date_to=${to}`,
+    );
     return mapMeetings(json);
+  }
+
+  async getSaturdayMeetings(date: string): Promise<ProviderMeeting[]> {
+    return this.getMeetings(date, date);
   }
 
   async getCard(meetingId: string): Promise<ProviderRace[]> {

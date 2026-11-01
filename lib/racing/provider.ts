@@ -53,9 +53,11 @@ export interface ProviderResult {
 
 export interface Provider {
   readonly name: string;
-  /** Saturday thoroughbred meetings. Metro filtering is applied downstream by
-   *  the sync using the track whitelist (lib/racing/tracks.ts) — providers
+  /** Thoroughbred meetings between two dates, inclusive. Metro filtering is
+   *  applied downstream by the sync using the track whitelist — providers
    *  return the raw card and never make whitelist decisions. */
+  getMeetings(from: string, to: string): Promise<ProviderMeeting[]>;
+  /** Saturday thoroughbred meetings. Same feed as getMeetings for one day. */
   getSaturdayMeetings(date: string): Promise<ProviderMeeting[]>;
   /** The race card for a meeting. */
   getCard(meetingId: string): Promise<ProviderRace[]>;

@@ -30,8 +30,7 @@ export function sydneyTodayISO(now: Date = new Date()): string {
  * scratchings/results jobs run on Saturday), otherwise the next Saturday (the
  * fields job runs Thursday/Friday ahead of the card).
  */
-export function targetSaturdayISO(): string {
-  const now = new Date();
+export function targetSaturdayISO(now: Date = new Date()): string {
   const { y, m, day, weekday } = sydneyParts(now);
   if (weekday === 'Sat') return toISO(y, m, day);
   for (let i = 1; i <= 7; i++) {
@@ -40,6 +39,17 @@ export function targetSaturdayISO(): string {
     if (p.weekday === 'Sat') return toISO(p.y, p.m, p.day);
   }
   return toISO(y, m, day);
+}
+
+/**
+ * Dates the home list should ask the feed for: today through the coming
+ * Saturday, Sydney time. Saturday-only sync missed midweek metro cards such
+ * as Flemington on Melbourne Cup day.
+ */
+export function syncWindowISO(now: Date = new Date()): { from: string; to: string } {
+  const today = sydneyTodayISO(now);
+  const saturday = targetSaturdayISO(now);
+  return today <= saturday ? { from: today, to: saturday } : { from: saturday, to: today };
 }
 
 /**
