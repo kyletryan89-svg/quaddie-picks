@@ -3,6 +3,9 @@ import { Suspense } from 'react';
 import { ListSkeleton } from '@/components/ErrorNote';
 import { getViewer } from '@/lib/auth';
 import { syncMeeting } from '@/lib/feed';
+import { ladbrokes } from '@/lib/racing/providers/ladbrokes';
+import { SOURCE_PREFIX, syncMeetingFieldById } from '@/lib/racing/sync';
+import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getComments, getLatestSyncError, getMeetingBundle } from '@/lib/queries';
 import { MeetingScreen } from './MeetingScreen';
 
@@ -29,9 +32,15 @@ async function MeetingLoader({ meetingId, currentUserId }: { meetingId: string; 
   // Refresh the field from the feed before rendering, so scratchings and late
   // changes are current. The meeting has already been rendered without this
   // data, so a feed hiccup must not take the screen down.
-  if (first.meeting.source_key !== null) {
+  const sourceKey = first.meeting.source_key;
+  if (sourceKey !== null) {
     try {
-      await syncMeeting(first.meeting.source_key);
+      if (sourceKey.startsWith(SOURCE_PREFIX)) {
+        const supabase = await createSupabaseServerClient();
+        await syncMeetingFieldById(supabase, ladbrokes, sourceKey.slice(SOURCE_PREFIX.length));
+      } else {
+        await syncMeeting(sourceKey);
+      }
     } catch {
       // Render with whatever is already in the DB.
     }

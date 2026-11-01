@@ -15,6 +15,7 @@
     "test:e2e": "tsx scripts/e2e-check.ts",
     "test:m11": "tsx scripts/m11-check.ts",
     "seed": "tsx scripts/seed.ts",
+    "sync:date": "tsx scripts/sync-date.ts",
     "smoke": "tsx scripts/smoke-test.ts"
   },
   "dependencies": {

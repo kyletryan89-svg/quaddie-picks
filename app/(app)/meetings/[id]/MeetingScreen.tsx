@@ -12,12 +12,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { syncMeetingNow } from '@/app/actions/sync';
 import { ChatBoard } from '@/components/ChatBoard';
+import { ExoticPicks } from '@/components/ExoticPicks';
 import { Comments } from '@/components/Comments';
 import { LegComments } from '@/components/LegComments';
 import { StatusBadge } from '@/components/StatusBadge';
 import { ResultsTable } from '@/components/ResultsTable';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 import { hasDisplayName, NAME_REQUIRED } from '@/lib/display-name';
+import { featureRaces } from '@/lib/feature-race';
 import { isUnsettled } from '@/lib/meeting-status';
 import { parseField, type ParsedRunner } from '@/lib/field-parse';
 import { formatDate, initialsOf, money } from '@/lib/format';
@@ -382,6 +384,23 @@ export function MeetingScreen({
           {syncResult}
         </p>
       )}
+
+      {featureRaces(legs).map((feature) => {
+        const leg = legs.find((item) => item.race_number === feature.raceNumber);
+        const field = leg === undefined ? [] : (runnersByLeg.get(leg.id) ?? []);
+        return (
+          <ExoticPicks
+            key={feature.raceNumber}
+            meetingId={meeting.id}
+            raceNumber={feature.raceNumber}
+            label={feature.label}
+            runners={field}
+            names={names}
+            currentUserId={currentUserId}
+            hasName={hasDisplayName(names, currentUserId)}
+          />
+        );
+      })}
 
       <p className="-mb-2 text-xs leading-relaxed text-slate-400">
         Mark your first pick, and another as your 2nd or 3rd. Add a comment if you wish.
